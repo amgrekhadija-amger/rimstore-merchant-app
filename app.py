@@ -13,7 +13,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 INSTANCE_ID = "instance158049" 
 API_TOKEN = "vs7zx4mnvuim0l1h"
 
-# --- 3. قاموس اللغات (Translations) ---
+# --- 3. قاموس اللغات (تحديث التراجم لتشمل الأزرار الجديدة) ---
 languages = {
     "العربية": {
         "dir": "rtl",
@@ -31,7 +31,9 @@ languages = {
         "p_price": "💰 السعر",
         "save": "حفظ ونشر المنتج",
         "qr_btn": "توليد رمز الـ QR",
-        "logout": "تسجيل الخروج"
+        "logout": "تسجيل الخروج",
+        "delete": "حذف",
+        "update": "تحديث السعر"
     },
     "Français": {
         "dir": "ltr",
@@ -49,14 +51,14 @@ languages = {
         "p_price": "💰 Prix",
         "save": "Enregistrer le produit",
         "qr_btn": "Générer le code QR",
-        "logout": "Déconnexion"
+        "logout": "Déconnexion",
+        "delete": "Supprimer",
+        "update": "Modifier le prix"
     }
 }
 
-# --- اختيار اللغة ---
-if 'lang' not in st.session_state:
-    st.session_state.lang = "العربية"
-
+# --- إعدادات الصفحة واللغة ---
+if 'lang' not in st.session_state: st.session_state.lang = "العربية"
 st.sidebar.title("🌐 Language / اللغة")
 st.session_state.lang = st.sidebar.selectbox("", ["العربية", "Français"])
 t = languages[st.session_state.lang]
@@ -64,14 +66,9 @@ t = languages[st.session_state.lang]
 st.set_page_config(page_title=t["title"], layout="wide")
 
 # --- إدارة الجلسة ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'merchant_phone' not in st.session_state:
-    st.session_state.merchant_phone = ""
-if 'store_name' not in st.session_state:
-    st.session_state.store_name = ""
+if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
-# --- القائمة الجانبية للتوثيق ---
+# --- بوابة التوثيق (Login/Signup) ---
 if not st.session_state.logged_in:
     st.sidebar.title(t["sidebar_title"])
     auth_mode = st.sidebar.radio("", t["auth_mode"])
@@ -80,76 +77,82 @@ if not st.session_state.logged_in:
         auth_phone = st.sidebar.text_input(t["phone"])
         password = st.sidebar.text_input(t["password"], type="password")
         if st.sidebar.button(t["login"]):
-            try:
-                check = supabase.table('merchants').select("*").eq('Phone', auth_phone).eq('password', password).limit(1).execute()
-                if check.data:
-                    st.session_state.logged_in = True
-                    st.session_state.merchant_phone = auth_phone
-                    st.session_state.store_name = check.data[0]['Store_name']
-                    st.rerun()
-                else:
-                    st.sidebar.error("❌ Invalid / خطأ")
-            except: st.sidebar.error("Error / خطأ")
-
-    else: 
+            res = supabase.table('merchants').select("*").eq('Phone', auth_phone).eq('password', password).execute()
+            if res.data:
+                st.session_state.logged_in = True
+                st.session_state.merchant_phone = auth_phone
+                st.session_state.store_name = res.data[0]['Store_name']
+                st.rerun()
+            else: st.sidebar.error("❌ الخطأ في البيانات")
+    else:
         new_phone = st.sidebar.text_input(t["phone"])
         new_store = st.sidebar.text_input(t["store_name"])
         new_pass = st.sidebar.text_input(t["password"], type="password")
         if st.sidebar.button(t["signup"]):
-            if new_phone and new_store and new_pass:
-                try:
-                    supabase.table('merchants').insert({"Phone": new_phone, "Store_name": new_store, "password": new_pass}).execute()
-                    st.session_state.logged_in = True
-                    st.session_state.merchant_phone = new_phone
-                    st.session_state.store_name = new_store
-                    st.rerun()
-                except: st.sidebar.error("Error / خطأ")
+            supabase.table('merchants').insert({"Phone": new_phone, "Store_name": new_store, "password": new_pass}).execute()
+            st.session_state.logged_in = True
+            st.session_state.merchant_phone = new_phone
+            st.session_state.store_name = new_store
+            st.rerun()
 
-# --- لوحة التحكم ---
+# --- لوحة التحكم الرئيسية بعد الدخول ---
 if st.session_state.logged_in:
-    st.sidebar.success(f"{st.session_state.store_name}")
+    st.sidebar.success(f"🏪 {st.session_state.store_name}")
     if st.sidebar.button(t["logout"]):
         st.session_state.logged_in = False
         st.rerun()
 
-    st.title(f"{t['title']}: {st.session_state.store_name}")
-    
     tab1, tab2, tab3, tab4 = st.tabs(t["tabs"])
 
+    # 1. إضافة منتج
     with tab1:
-        with st.form("add_product_form"):
-            st.subheader(t["add_prod_title"])
-            c1, c2 = st.columns(2)
-            with c1:
-                p_name = st.text_input(t["p_name"])
-                p_price = st.text_input(t["p_price"])
-            with c2:
-                uploaded_file = st.file_uploader("📸 Image", type=['jpg', 'png', 'jpeg'])
-            
+        st.subheader(t["add_prod_title"])
+        with st.form("add_form"):
+            p_name = st.text_input(t["p_name"])
+            p_price = st.text_input(t["p_price"])
+            uploaded_file = st.file_uploader("📸 Image", type=['jpg', 'png', 'jpeg'])
             if st.form_submit_button(t["save"]):
-                if p_name and uploaded_file:
-                    file_name = f"{uuid.uuid4()}.{uploaded_file.name.split('.')[-1]}"
-                    file_path = f"public/{file_name}"
-                    supabase.storage.from_('product-images').upload(file_path, uploaded_file.read())
-                    img_url = supabase.storage.from_('product-images').get_public_url(file_path)
-                    
+                if p_name and p_price and uploaded_file:
+                    file_name = f"{uuid.uuid4()}.png"
+                    supabase.storage.from_('product-images').upload(file_name, uploaded_file.read())
+                    img_url = supabase.storage.from_('product-images').get_public_url(file_name)
                     supabase.table('products').insert({
                         "Phone": st.session_state.merchant_phone,
                         "Product": p_name, "Price": p_price, "Image_url": img_url
                     }).execute()
-                    st.success("Success / تم الحفظ")
+                    st.success("✅ تم حفظ المنتج")
                     st.rerun()
 
-    # (بقية الـ Tabs تتبع نفس المنطق باستخدام متغير t لجلب النصوص)
+    # 2. إدارة الأسعار (تعديل وحذف) - ميزة جديدة
+    with tab2:
+        st.subheader(t["tabs"][1])
+        prods = supabase.table('products').select("*").eq('Phone', st.session_state.merchant_phone).execute()
+        if prods.data:
+            for p in prods.data:
+                col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+                with col1: st.write(f"**{p['Product']}**")
+                with col2: new_val = st.text_input(f"السعر لـ {p['Product']}", value=p['Price'], key=f"p_{p['id']}")
+                with col3:
+                    if st.button(t["update"], key=f"up_{p['id']}"):
+                        supabase.table('products').update({"Price": new_val}).eq('id', p['id']).execute()
+                        st.rerun()
+                with col4:
+                    if st.button(t["delete"], key=f"del_{p['id']}"):
+                        supabase.table('products').delete().eq('id', p['id']).execute()
+                        st.rerun()
+
+    # 3. الطلبات (مباشرة من البوت)
     with tab3:
         st.subheader(t["tabs"][2])
         orders = supabase.table('orders').select("*").eq('merchant_phone', st.session_state.merchant_phone).execute()
         if orders.data:
             df = pd.DataFrame(orders.data)
-            st.dataframe(df)
+            st.dataframe(df[["customer_phone", "product_name", "total_price", "status", "created_at"]])
+        else: st.info("لا توجد طلبات جديدة")
 
+    # 4. ربط الواتساب (QR Code)
     with tab4:
         st.subheader(t["tabs"][3])
         qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}"
         if st.button(t["qr_btn"]):
-            st.image(qr_url, width=350)
+            st.image(qr_url, caption="Scan this with your WhatsApp", width=300)
