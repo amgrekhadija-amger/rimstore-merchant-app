@@ -116,29 +116,29 @@ if st.session_state.logged_in:
     with tab4:
         st.subheader(t["tabs"][3])
         
-        # فحص حالة الجهاز من UltraMsg
+        # فحص الحالة
         status_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/status?token={API_TOKEN}"
         try:
-            response = requests.get(status_url).json()
-            server_status = response.get("status", "") 
+            res = requests.get(status_url).json()
+            server_status = res.get("status", "")
         except:
             server_status = "error"
 
         if server_status == "authenticated":
             st.success("✅ البوت نشط ومرتبط حالياً!")
-            col1, col2 = st.columns(2)
-            if col1.button("🔄 إعادة تنشيط الجلسة"):
-                # محاولة تنشيط الجلسة إذا كانت تظهر غير نشطة
-                requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/restart?token={API_TOKEN}")
-                st.rerun()
-            if col2.button("🔴 فك الارتباط نهائياً"):
+            if st.button("🔴 إلغاء الارتباط وتسجيل الخروج"):
                 requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
                 st.rerun()
-        
         else:
-            st.warning("⚠️ البوت غير مرتبط. يرجى المسح أو الفتح في صفحة جديدة.")
-            qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
-            st.image(qr_url, caption="امسحي الرمز من هاتفك", width=350)
-            st.markdown(f'**[🔗 اضغطي هنا لفتح الرمز في صفحة مستقلة]({qr_url})**')
-            if st.button("🔄 تحديث"):
+            # إذا كان هناك خطأ في السيرفر أو طلب QR
+            st.error("⚠️ البوت يحتاج لإعادة ربط.")
+            
+            # زر إجباري لتنظيف الجلسة القديمة (المسؤولة عن الخطأ في صورك)
+            if st.button("🔄 تنظيف الجلسة وإظهار الرمز"):
+                requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
+                time.sleep(2)
                 st.rerun()
+
+            qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
+            st.image(qr_url, caption="امسحي الرمز الآن", width=350)
+            st.markdown(f'**[🔗 اضغطي هنا إذا لم يظهر الرمز]({qr_url})**')
