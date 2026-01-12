@@ -2,7 +2,7 @@ import streamlit as st
 from supabase import create_client
 import pandas as pd
 import uuid
-import requests
+import time
 
 # --- 1. إعدادات السحابة (Supabase) ---
 SUPABASE_URL = "https://pxgpkdrwsrwaldntpsca.supabase.co"
@@ -13,146 +13,126 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 INSTANCE_ID = "instance158049" 
 API_TOKEN = "vs7zx4mnvuim0l1h"
 
-# --- 3. قاموس اللغات (تحديث التراجم لتشمل الأزرار الجديدة) ---
+# --- 3. قاموس اللغات الاحترافي ---
 languages = {
     "العربية": {
-        "dir": "rtl",
-        "title": "RimStore - لوحة تحكم التاجر",
-        "sidebar_title": "🔐 بوابة التاجر",
-        "auth_mode": ["تسجيل دخول", "إنشاء حساب جديد"],
-        "login": "دخول",
-        "signup": "إنشاء الحساب والدخول",
-        "phone": "رقم الواتساب",
-        "password": "كلمة السر",
-        "store_name": "اسم المتجر",
+        "dir": "rtl", "title": "RimStore - التاجر الذكي",
+        "sidebar_title": "🔐 دخول التجار", "phone": "رقم الواتساب",
+        "password": "كلمة السر", "store_name": "اسم المتجر",
         "tabs": ["➕ إضافة منتج", "✏️ إدارة الأسعار", "🛒 الطلبات", "📲 ربط الواتساب"],
-        "add_prod_title": "إضافة بضاعة جديدة",
-        "p_name": "📍 اسم المنتج",
-        "p_price": "💰 السعر",
-        "save": "حفظ ونشر المنتج",
-        "qr_btn": "توليد رمز الـ QR",
-        "logout": "تسجيل الخروج",
-        "delete": "حذف",
-        "update": "تحديث السعر"
+        "add_prod_title": "إضافة بضاعة جديدة", "p_name": "📍 اسم المنتج",
+        "p_price": "💰 السعر (أوقية)", "save": "حفظ ونشر المنتج",
+        "qr_btn": "توليد رمز الـ QR الآن", "logout": "تسجيل الخروج",
+        "delete": "حذف", "update": "تعديل", "loading": "جاري التحميل..."
     },
     "Français": {
-        "dir": "ltr",
-        "title": "RimStore - Dashboard Marchand",
-        "sidebar_title": "🔐 Portail Marchand",
-        "auth_mode": ["Connexion", "Créer un compte"],
-        "login": "Se connecter",
-        "signup": "S'inscrire",
-        "phone": "Numéro WhatsApp",
-        "password": "Mot de passe",
-        "store_name": "Nom de la boutique",
-        "tabs": ["➕ Ajouter Produit", "✏️ Gestion Prix", "🛒 Commandes", "📲 Liaison WhatsApp"],
-        "add_prod_title": "Ajouter un nouveau produit",
-        "p_name": "📍 Nom du produit",
-        "p_price": "💰 Prix",
-        "save": "Enregistrer le produit",
-        "qr_btn": "Générer le code QR",
-        "logout": "Déconnexion",
-        "delete": "Supprimer",
-        "update": "Modifier le prix"
+        "dir": "ltr", "title": "RimStore - Smart Merchant",
+        "sidebar_title": "🔐 Accès Marchand", "phone": "WhatsApp Number",
+        "password": "Mot de passe", "store_name": "Nom Boutique",
+        "tabs": ["➕ Produit", "✏️ Prix", "🛒 Commandes", "📲 Liaison"],
+        "add_prod_title": "Nouveau Produit", "p_name": "📍 Nom",
+        "p_price": "💰 Prix", "save": "Enregistrer",
+        "qr_btn": "Générer QR Code", "logout": "Déconnexion",
+        "delete": "Suppr.", "update": "Modifier", "loading": "Chargement..."
     }
 }
 
-# --- إعدادات الصفحة واللغة ---
+# --- إعدادات الصفحة الافتراضية ---
 if 'lang' not in st.session_state: st.session_state.lang = "العربية"
-st.sidebar.title("🌐 Language / اللغة")
-st.session_state.lang = st.sidebar.selectbox("", ["العربية", "Français"])
+st.sidebar.title("🌐")
+st.session_state.lang = st.sidebar.selectbox("Language", ["العربية", "Français"])
 t = languages[st.session_state.lang]
 
-st.set_page_config(page_title=t["title"], layout="wide")
+st.set_page_config(page_title=t["title"], layout="wide", initial_sidebar_state="expanded")
+
+# --- وظائف سريعة (Caching) لتحسين السرعة ---
+def get_products(phone):
+    return supabase.table('products').select("*").eq('Phone', phone).execute()
+
+def get_orders(phone):
+    return supabase.table('orders').select("*").eq('merchant_phone', phone).execute()
 
 # --- إدارة الجلسة ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
-# --- بوابة التوثيق (Login/Signup) ---
 if not st.session_state.logged_in:
-    st.sidebar.title(t["sidebar_title"])
-    auth_mode = st.sidebar.radio("", t["auth_mode"])
+    with st.sidebar:
+        st.title(t["sidebar_title"])
+        auth_mode = st.radio("", ["Login", "Signup"] if st.session_state.lang == "Français" else ["تسجيل دخول", "إنشاء حساب"])
+        
+        phone = st.text_input(t["phone"], placeholder="222xxxxxxx")
+        pwd = st.text_input(t["password"], type="password")
+        
+        if "Signup" in auth_mode or "إنشاء" in auth_mode:
+            store = st.text_input(t["store_name"])
+            if st.button(t["save"]):
+                supabase.table('merchants').insert({"Phone": phone, "Store_name": store, "password": pwd}).execute()
+                st.success("Success!")
+        else:
+            if st.button(t["logout"].replace("الخروج", "الدخول")):
+                res = supabase.table('merchants').select("*").eq('Phone', phone).eq('password', pwd).execute()
+                if res.data:
+                    st.session_state.logged_in = True
+                    st.session_state.merchant_phone = phone
+                    st.session_state.store_name = res.data[0]['Store_name']
+                    st.rerun()
+                else: st.error("❌ Error")
 
-    if auth_mode in ["تسجيل دخول", "Connexion"]:
-        auth_phone = st.sidebar.text_input(t["phone"])
-        password = st.sidebar.text_input(t["password"], type="password")
-        if st.sidebar.button(t["login"]):
-            res = supabase.table('merchants').select("*").eq('Phone', auth_phone).eq('password', password).execute()
-            if res.data:
-                st.session_state.logged_in = True
-                st.session_state.merchant_phone = auth_phone
-                st.session_state.store_name = res.data[0]['Store_name']
-                st.rerun()
-            else: st.sidebar.error("❌ الخطأ في البيانات")
-    else:
-        new_phone = st.sidebar.text_input(t["phone"])
-        new_store = st.sidebar.text_input(t["store_name"])
-        new_pass = st.sidebar.text_input(t["password"], type="password")
-        if st.sidebar.button(t["signup"]):
-            supabase.table('merchants').insert({"Phone": new_phone, "Store_name": new_store, "password": new_pass}).execute()
-            st.session_state.logged_in = True
-            st.session_state.merchant_phone = new_phone
-            st.session_state.store_name = new_store
-            st.rerun()
-
-# --- لوحة التحكم الرئيسية بعد الدخول ---
+# --- لوحة التحكم ---
 if st.session_state.logged_in:
-    st.sidebar.success(f"🏪 {st.session_state.store_name}")
+    st.title(f"🏪 {st.session_state.store_name}")
     if st.sidebar.button(t["logout"]):
         st.session_state.logged_in = False
         st.rerun()
 
     tab1, tab2, tab3, tab4 = st.tabs(t["tabs"])
 
-    # 1. إضافة منتج
     with tab1:
         st.subheader(t["add_prod_title"])
-        with st.form("add_form"):
-            p_name = st.text_input(t["p_name"])
-            p_price = st.text_input(t["p_price"])
-            uploaded_file = st.file_uploader("📸 Image", type=['jpg', 'png', 'jpeg'])
+        with st.form("fast_add", clear_on_submit=True):
+            col_a, col_b = st.columns(2)
+            name = col_a.text_input(t["p_name"])
+            price = col_b.text_input(t["p_price"])
+            img = st.file_uploader("📸 Image", type=['jpg', 'png', 'jpeg'])
             if st.form_submit_button(t["save"]):
-                if p_name and p_price and uploaded_file:
-                    file_name = f"{uuid.uuid4()}.png"
-                    supabase.storage.from_('product-images').upload(file_name, uploaded_file.read())
-                    img_url = supabase.storage.from_('product-images').get_public_url(file_name)
+                with st.spinner(t["loading"]):
+                    img_id = f"{uuid.uuid4()}.png"
+                    supabase.storage.from_('product-images').upload(img_id, img.read())
+                    url = supabase.storage.from_('product-images').get_public_url(img_id)
                     supabase.table('products').insert({
                         "Phone": st.session_state.merchant_phone,
-                        "Product": p_name, "Price": p_price, "Image_url": img_url
+                        "Product": name, "Price": price, "Image_url": url
                     }).execute()
-                    st.success("✅ تم حفظ المنتج")
-                    st.rerun()
+                    st.balloons()
+                    st.success("✅ Done")
 
-    # 2. إدارة الأسعار (تعديل وحذف) - ميزة جديدة
     with tab2:
         st.subheader(t["tabs"][1])
-        prods = supabase.table('products').select("*").eq('Phone', st.session_state.merchant_phone).execute()
-        if prods.data:
-            for p in prods.data:
-                col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
-                with col1: st.write(f"**{p['Product']}**")
-                with col2: new_val = st.text_input(f"السعر لـ {p['Product']}", value=p['Price'], key=f"p_{p['id']}")
-                with col3:
-                    if st.button(t["update"], key=f"up_{p['id']}"):
-                        supabase.table('products').update({"Price": new_val}).eq('id', p['id']).execute()
-                        st.rerun()
-                with col4:
-                    if st.button(t["delete"], key=f"del_{p['id']}"):
-                        supabase.table('products').delete().eq('id', p['id']).execute()
-                        st.rerun()
+        prods = get_products(st.session_state.merchant_phone)
+        for p in prods.data:
+            with st.expander(f"📦 {p['Product']} - {p['Price']} MRU"):
+                c1, c2 = st.columns(2)
+                new_p = c1.text_input(t["p_price"], value=p['Price'], key=f"v_{p['id']}")
+                if c2.button(t["update"], key=f"u_{p['id']}"):
+                    supabase.table('products').update({"Price": new_p}).eq('id', p['id']).execute()
+                    st.rerun()
+                if st.button(t["delete"], key=f"d_{p['id']}", type="secondary"):
+                    supabase.table('products').delete().eq('id', p['id']).execute()
+                    st.rerun()
 
-    # 3. الطلبات (مباشرة من البوت)
     with tab3:
         st.subheader(t["tabs"][2])
-        orders = supabase.table('orders').select("*").eq('merchant_phone', st.session_state.merchant_phone).execute()
-        if orders.data:
-            df = pd.DataFrame(orders.data)
-            st.dataframe(df[["customer_phone", "product_name", "total_price", "status", "created_at"]])
-        else: st.info("لا توجد طلبات جديدة")
+        ord_data = get_orders(st.session_state.merchant_phone)
+        if ord_data.data:
+            st.table(pd.DataFrame(ord_data.data)[["customer_phone", "product_name", "total_price", "status"]])
+        else: st.info("No orders yet")
 
-    # 4. ربط الواتساب (QR Code)
     with tab4:
         st.subheader(t["tabs"][3])
-        qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}"
+        # ميزة الـ QR Code المستقر
+        qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&timestamp={int(time.time())}"
+        st.info("💡 امسحي الرمز من هاتفك لربط البوت بالمتجر.")
         if st.button(t["qr_btn"]):
-            st.image(qr_url, caption="Scan this with your WhatsApp", width=300)
+            with st.spinner(t["loading"]):
+                st.image(qr_url, width=350)
+                st.markdown(f"**[رابط مباشر للرمز في حال لم يظهر اضغطي هنا]({qr_url})**")
