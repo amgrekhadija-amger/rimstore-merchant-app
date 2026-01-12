@@ -1,8 +1,9 @@
 import streamlit as st
 from supabase import create_client
-import pandas as pd  # تم تصحيح الاسم هنا من pd إلى pandas
+import pandas as pd 
 import uuid
 import time
+import requests
 
 # --- 1. إعدادات السحابة (Supabase) ---
 SUPABASE_URL = "https://pxgpkdrwsrwaldntpsca.supabase.co"
@@ -40,7 +41,6 @@ st.set_page_config(page_title="RimStore", layout="wide")
 
 if 'lang' not in st.session_state: st.session_state.lang = "العربية"
 st.sidebar.title("🌐 Language")
-# إصلاح خطأ الـ Label الفارغ
 st.session_state.lang = st.sidebar.selectbox("اختر اللغة / Langue", ["العربية", "Français"])
 t = languages[st.session_state.lang]
 
@@ -50,7 +50,6 @@ if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if not st.session_state.logged_in:
     with st.sidebar:
         st.title(t["sidebar_title"])
-        # إصلاح خطأ الراديو هنا
         auth_mode = st.radio("العملية", ["تسجيل دخول", "إنشاء حساب"] if st.session_state.lang == "العربية" else ["Connexion", "Signup"])
         phone = st.text_input(t["phone"], placeholder="222xxxxxxx")
         pwd = st.text_input(t["password"], type="password")
@@ -119,8 +118,28 @@ if st.session_state.logged_in:
 
     with tab4:
         st.subheader(t["tabs"][3])
-        # ميزة الـ QR Code المستقر مع منع التخزين المؤقت
-        qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
-        if st.button(t["qr_btn"]):
-            st.image(qr_url, caption="Scan with WhatsApp", width=300)
-            st.markdown(f"**[إذا لم تظهر الصورة اضغط هنا لفتح الرمز]({qr_url})**")
+        
+        # --- التعديل الذكي لحالة الاتصال ---
+        status_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/status?token={API_TOKEN}"
+        try:
+            response = requests.get(status_url).json()
+            server_status = response.get("status", "") 
+        except:
+            server_status = "error"
+
+        if server_status == "authenticated":
+            st.success("✅ واتسابك مرتبط حالياً وجاهز للعمل!")
+            if st.button("🔴 تسجيل الخروج من الواتساب"):
+                requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
+                st.rerun()
+        
+        else:
+            st.warning("⚠️ واتسابك غير مرتبط حالياً.")
+            qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
+            
+            # إظهار الرمز والرابط مباشرة للأجهزة غير المرتبطة
+            st.image(qr_url, caption="امسحي الرمز من هاتفك", width=350)
+            st.markdown(f'**[🔗 اضغطي هنا لفتح صورة الرمز مباشرة]({qr_url})**')
+            
+            if st.button("🔄 تحديث حالة الاتصال"):
+                st.rerun()
