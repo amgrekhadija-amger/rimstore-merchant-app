@@ -14,7 +14,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 INSTANCE_ID = "instance158049" 
 API_TOKEN = "vs7zx4mnvuim0l1h"
 
-# --- 3. قاموس اللغات المصحح ---
+# --- 3. قاموس اللغات ---
 languages = {
     "العربية": {
         "dir": "rtl", "title": "RimStore - لوحة التاجر",
@@ -22,7 +22,7 @@ languages = {
         "password": "كلمة السر", "store_name": "اسم المتجر",
         "tabs": ["➕ إضافة منتج", "✏️ إدارة الأسعار", "🛒 الطلبات", "📲 ربط الواتساب"],
         "p_name": "📍 اسم المنتج", "p_price": "💰 السعر", "p_size": "📏 المقاسات",
-        "p_color": "🎨 الألوان", "p_stock": "📦 الحالة", "stock_true": "متوفر", "stock_false": "ماه خالك",
+        "p_color": "🎨 الألوان", "p_stock": "📦 الحالة", "stock_true": "متوفر", "stock_false": "ماه خالك عندنا ظرك",
         "save": "حفظ ونشر", "qr_btn": "توليد رمز الـ QR", "update": "تحديث", "loading": "جاري الحفظ..."
     },
     "Français": {
@@ -36,7 +36,6 @@ languages = {
     }
 }
 
-# --- إعدادات الصفحة ---
 st.set_page_config(page_title="RimStore", layout="wide")
 
 if 'lang' not in st.session_state: st.session_state.lang = "العربية"
@@ -44,7 +43,6 @@ st.sidebar.title("🌐 Language")
 st.session_state.lang = st.sidebar.selectbox("اختر اللغة / Langue", ["العربية", "Français"])
 t = languages[st.session_state.lang]
 
-# --- إدارة الجلسة ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
@@ -68,7 +66,6 @@ if not st.session_state.logged_in:
                     st.rerun()
                 else: st.error("❌ الخطأ في البيانات")
 
-# --- لوحة التحكم الرئيسية ---
 if st.session_state.logged_in:
     st.sidebar.success(f"🏪 {st.session_state.store_name}")
     tab1, tab2, tab3, tab4 = st.tabs(t["tabs"])
@@ -119,7 +116,7 @@ if st.session_state.logged_in:
     with tab4:
         st.subheader(t["tabs"][3])
         
-        # --- التعديل الذكي لحالة الاتصال ---
+        # فحص حالة الجهاز من UltraMsg
         status_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/status?token={API_TOKEN}"
         try:
             response = requests.get(status_url).json()
@@ -128,18 +125,20 @@ if st.session_state.logged_in:
             server_status = "error"
 
         if server_status == "authenticated":
-            st.success("✅ واتسابك مرتبط حالياً وجاهز للعمل!")
-            if st.button("🔴 تسجيل الخروج من الواتساب"):
+            st.success("✅ البوت نشط ومرتبط حالياً!")
+            col1, col2 = st.columns(2)
+            if col1.button("🔄 إعادة تنشيط الجلسة"):
+                # محاولة تنشيط الجلسة إذا كانت تظهر غير نشطة
+                requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/restart?token={API_TOKEN}")
+                st.rerun()
+            if col2.button("🔴 فك الارتباط نهائياً"):
                 requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
                 st.rerun()
         
         else:
-            st.warning("⚠️ واتسابك غير مرتبط حالياً.")
+            st.warning("⚠️ البوت غير مرتبط. يرجى المسح أو الفتح في صفحة جديدة.")
             qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
-            
-            # إظهار الرمز والرابط مباشرة للأجهزة غير المرتبطة
             st.image(qr_url, caption="امسحي الرمز من هاتفك", width=350)
-            st.markdown(f'**[🔗 اضغطي هنا لفتح صورة الرمز مباشرة]({qr_url})**')
-            
-            if st.button("🔄 تحديث حالة الاتصال"):
+            st.markdown(f'**[🔗 اضغطي هنا لفتح الرمز في صفحة مستقلة]({qr_url})**')
+            if st.button("🔄 تحديث"):
                 st.rerun()
