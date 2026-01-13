@@ -125,15 +125,14 @@ if st.session_state.logged_in:
             server_status = "error"
 
         if server_status == "authenticated":
-            st.success("✅ البوت نشط ومرتبط حالياً!")
+            st.success("✅ البوت نشط ومرتبط حالياً بالسيرفر!")
+            st.info("💡 ملاحظة: الردود التلقائية تتم عبر السكريبت المشغل على PythonAnywhere.")
             if st.button("🔴 إلغاء الارتباط وتسجيل الخروج"):
                 requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
                 st.rerun()
         else:
-            # إذا كان هناك خطأ في السيرفر أو طلب QR
             st.error("⚠️ البوت يحتاج لإعادة ربط.")
             
-            # زر إجباري لتنظيف الجلسة القديمة (المسؤولة عن الخطأ في صورك)
             if st.button("🔄 تنظيف الجلسة وإظهار الرمز"):
                 requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
                 time.sleep(2)
@@ -142,3 +141,10 @@ if st.session_state.logged_in:
             qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
             st.image(qr_url, caption="امسحي الرمز الآن", width=350)
             st.markdown(f'**[🔗 اضغطي هنا إذا لم يظهر الرمز]({qr_url})**')
+
+        st.divider()
+        # إضافة تأكيد لرابط الـ Webhook ليتناسب مع bot.py
+        st.write("⚙️ **إعدادات المسار (Webhook):**")
+        webhook_path = "https://khadija.pythonanywhere.com/whatsapp" # استبدلي khadija باسم مستخدمك
+        st.code(webhook_path, language="text")
+        st.caption("تأكدي من وضع هذا الرابط في إعدادات Webhook بموقع UltraMsg ليعمل الرد التلقائي.")
