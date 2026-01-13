@@ -116,35 +116,50 @@ if st.session_state.logged_in:
     with tab4:
         st.subheader(t["tabs"][3])
         
-        # فحص الحالة
-        status_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/status?token={API_TOKEN}"
+        # التأكد من الإعدادات
+        instance = "instance158049" 
+        token = "vs7zx4mnvuim0l1h"
+        
+        # طلب الحالة مباشرة من UltraMsg
+        status_url = f"https://api.ultramsg.com/{instance}/instance/status?token={token}"
+        
         try:
-            res = requests.get(status_url).json()
-            server_status = res.get("status", "")
-        except:
+            response = requests.get(status_url, timeout=10)
+            data = response.json()
+            server_status = data.get("status", "unknown")
+        except Exception as e:
+            st.error(f"خطأ في الاتصال بالسيرفر: {e}")
             server_status = "error"
 
+        # عرض الحالة بناءً على رد UltraMsg الحقيقي
         if server_status == "authenticated":
-            st.success("✅ البوت نشط ومرتبط حالياً بالسيرفر!")
-            st.info("💡 ملاحظة: الردود التلقائية تتم عبر السكريبت المشغل على PythonAnywhere.")
-            if st.button("🔴 إلغاء الارتباط وتسجيل الخروج"):
-                requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
+            st.success("✅ متصل تماماً: UltraMsg تؤكد أن البوت يعمل الآن.")
+            st.info("💡 إذا كان الهاتف يغلق البوت عند الخروج، فالمشكلة في 'إعدادات البطارية' وليست في الكود.")
+            if st.button("🔄 تحديث الحالة الآن"):
+                st.rerun()
+            if st.button("🔴 قطع الارتباط نهائياً"):
+                requests.get(f"https://api.ultramsg.com/{instance}/instance/logout?token={token}")
                 st.rerun()
         else:
-            st.error("⚠️ البوت يحتاج لإعادة ربط.")
+            st.warning(f"⚠️ الحالة الحالية: {server_status}")
+            st.error("البوت يحتاج لمسح الرمز أو هناك جلسة معلقة.")
             
-            if st.button("🔄 تنظيف الجلسة وإظهار الرمز"):
-                requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
-                time.sleep(2)
-                st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🧹 تنظيف الجلسة (إصلاح تعليق الرمز)"):
+                    requests.get(f"https://api.ultramsg.com/{instance}/instance/logout?token={token}")
+                    time.sleep(2)
+                    st.rerun()
+            with col2:
+                if st.button("🆕 توليد رمز جديد"):
+                    st.rerun()
 
-            qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
-            st.image(qr_url, caption="امسحي الرمز الآن", width=350)
-            st.markdown(f'**[🔗 اضغطي هنا إذا لم يظهر الرمز]({qr_url})**')
+            qr_url = f"https://api.ultramsg.com/{instance}/instance/qr?token={token}&t={int(time.time())}"
+            st.image(qr_url, caption="امسحي الرمز من واتساب هاتفك", width=300)
 
         st.divider()
-        # إضافة تأكيد لرابط الـ Webhook ليتناسب مع bot.py
         st.write("⚙️ **إعدادات المسار (Webhook):**")
-        webhook_path = "https://khadija.pythonanywhere.com/whatsapp" # استبدلي khadija باسم مستخدمك
+        # الرابط الذي يجب وضعه في UltraMsg ليرسل الرسائل لـ PythonAnywhere
+        webhook_path = "https://amgrekhadija-amger.pythonanywhere.com/whatsapp"
         st.code(webhook_path, language="text")
-        st.caption("تأكدي من وضع هذا الرابط في إعدادات Webhook بموقع UltraMsg ليعمل الرد التلقائي.")
+        st.caption("تأكدي من وضع هذا الرابط في إعدادات Webhook بموقع UltraMsg.")
