@@ -44,18 +44,26 @@ t = languages[st.session_state.lang]
 
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
+# --- إصلاح واجهة الدخول وإنشاء الحساب ---
 if not st.session_state.logged_in:
     with st.sidebar:
         st.title(t["sidebar_title"])
         auth_mode = st.radio("العملية", ["تسجيل دخول", "إنشاء حساب"] if st.session_state.lang == "العربية" else ["Connexion", "Signup"])
+        
         phone = st.text_input(t["phone"], placeholder="222xxxxxxx")
         pwd = st.text_input(t["password"], type="password")
         
+        store_name = ""
+        if "إنشاء" in auth_mode or "Signup" in auth_mode:
+            store_name = st.text_input(t["store_name"], placeholder="اسم متجرك هنا")
+        
         if st.button("تأكيد / Confirmer"):
             if "إنشاء" in auth_mode or "Signup" in auth_mode:
-                store = st.text_input(t["store_name"])
-                supabase.table('merchants').insert({"Phone": phone, "Store_name": store, "password": pwd}).execute()
-                st.success("Done!")
+                if phone and pwd and store_name:
+                    supabase.table('merchants').insert({"Phone": phone, "Store_name": store_name, "password": pwd}).execute()
+                    st.success("تم إنشاء الحساب! يمكنك الدخول الآن.")
+                else:
+                    st.error("يرجى ملء جميع الحقول")
             else:
                 res = supabase.table('merchants').select("*").eq('Phone', phone).eq('password', pwd).execute()
                 if res.data:
@@ -63,10 +71,15 @@ if not st.session_state.logged_in:
                     st.session_state.merchant_phone = phone
                     st.session_state.store_name = res.data[0]['Store_name']
                     st.rerun()
-                else: st.error("❌ الخطأ في البيانات")
+                else: st.error("❌ خطأ في رقم الهاتف أو كلمة السر")
 
+# --- واجهة المتجر بعد الدخول ---
 if st.session_state.logged_in:
     st.sidebar.success(f"🏪 {st.session_state.store_name}")
+    if st.sidebar.button("تسجيل الخروج"):
+        st.session_state.logged_in = False
+        st.rerun()
+
     tab1, tab2, tab3, tab4 = st.tabs(t["tabs"])
 
     with tab1:
@@ -93,7 +106,7 @@ if st.session_state.logged_in:
                             "Status": True if p_stock == t["stock_true"] else False,
                             "Image_url": url
                         }).execute()
-                        st.success("✅ تم بنجاح")
+                        st.success("✅ تم نشر المنتج")
 
     with tab2:
         st.subheader(t["tabs"][1])
@@ -114,32 +127,34 @@ if st.session_state.logged_in:
 
     with tab4:
         st.subheader(t["tabs"][3])
-        
         status_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/status?token={API_TOKEN}"
         
         try:
-            response = requests.get(status_url, timeout=10)
-            server_status = response.json().get("status", "unknown")
+            res = requests.get(status_url, timeout=10).json()
+            server_status = res.get("status", "unknown")
         except:
             server_status = "error"
 
         if server_status == "authenticated":
-            st.success("✅ البوت مرتبط الآن ويعمل بشكل تلقائي.")
-            st.info("💡 لا داعي لمسح الرمز مرة أخرى. الربط دائم حتى لو خرجت من الصفحة.")
-            if st.button("🔄 تحديث حالة الاتصال"):
+            st.success("✅ البوت مرتبط تماماً ونشط.")
+            st.info("البوت يعمل الآن في الخلفية، يمكنك إضافة المنتجات وسيرد تلقائياً على الزبائن.")
+            if st.button("🔄 تحديث الحالة"):
                 st.rerun()
-            with st.expander("⚠️ خيارات متقدمة"):
-                if st.button("🔴 تسجيل خروج وقطع الارتباط"):
+            with st.expander("⚙️ خيارات متقدمة"):
+                if st.button("🔴 إلغاء ربط الجهاز الحالي"):
                     requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
                     st.rerun()
         
-        elif server_status in ["qr", "init", "unknown"]:
-            st.warning("⚠️ البوت يحتاج لمسح الرمز للربط.")
+        else:
+            st.warning("⚠️ مطلوب ربط الواتساب لتفعيل الرد التلقائي.")
             qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
-            st.image(qr_url, caption="امسحي الرمز من واتساب هاتفك", width=300)
-            if st.button("🧹 تنظيف وإصلاح الجلسة"):
+            st.image(qr_url, caption="افتح واتساب > الأجهزة المرتبطة > ربط جهاز", width=300)
+            
+            if st.button("🧹 تنظيف الجلسة وإعادة المحاولة"):
                 requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
                 time.sleep(2)
                 st.rerun()
-        else:
-            st.error(f"الحالة: {server_status}")
+
+    with tab3:
+        st.subheader("🛒 الطلبات القادمة")
+        st.info("سيتم عرض طلبات الزبائن هنا فور وصولها عبر الواتساب.")
