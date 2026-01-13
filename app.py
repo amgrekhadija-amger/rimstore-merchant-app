@@ -1,6 +1,5 @@
 import streamlit as st
 from supabase import create_client
-import pandas as pd 
 import uuid
 import time
 import requests
@@ -23,7 +22,7 @@ languages = {
         "tabs": ["➕ إضافة منتج", "✏️ إدارة الأسعار", "🛒 الطلبات", "📲 ربط الواتساب"],
         "p_name": "📍 اسم المنتج", "p_price": "💰 السعر", "p_size": "📏 المقاسات",
         "p_color": "🎨 الألوان", "p_stock": "📦 الحالة", "stock_true": "متوفر", "stock_false": "ماه خالك عندنا ظرك",
-        "save": "حفظ ونشر", "qr_btn": "توليد رمز الـ QR", "update": "تحديث", "loading": "جاري الحفظ..."
+        "save": "حفظ ونشر", "update": "تحديث", "loading": "جاري الحفظ..."
     },
     "Français": {
         "dir": "ltr", "title": "RimStore - Dashboard",
@@ -32,7 +31,7 @@ languages = {
         "tabs": ["➕ Ajouter", "✏️ Prix", "🛒 Commandes", "📲 Liaison"],
         "p_name": "📍 Nom", "p_price": "💰 Prix", "p_size": "📏 Tailles",
         "p_color": "🎨 Couleurs", "p_stock": "📦 État", "stock_true": "Disponible", "stock_false": "Rupture",
-        "save": "Enregistrer", "qr_btn": "Générer QR", "update": "Modifier", "loading": "Chargement..."
+        "save": "Enregistrer", "update": "Modifier", "loading": "Chargement..."
     }
 }
 
@@ -116,50 +115,31 @@ if st.session_state.logged_in:
     with tab4:
         st.subheader(t["tabs"][3])
         
-        # التأكد من الإعدادات
-        instance = "instance158049" 
-        token = "vs7zx4mnvuim0l1h"
-        
-        # طلب الحالة مباشرة من UltraMsg
-        status_url = f"https://api.ultramsg.com/{instance}/instance/status?token={token}"
+        status_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/status?token={API_TOKEN}"
         
         try:
             response = requests.get(status_url, timeout=10)
-            data = response.json()
-            server_status = data.get("status", "unknown")
-        except Exception as e:
-            st.error(f"خطأ في الاتصال بالسيرفر: {e}")
+            server_status = response.json().get("status", "unknown")
+        except:
             server_status = "error"
 
-        # عرض الحالة بناءً على رد UltraMsg الحقيقي
         if server_status == "authenticated":
-            st.success("✅ متصل تماماً: UltraMsg تؤكد أن البوت يعمل الآن.")
-            st.info("💡 إذا كان الهاتف يغلق البوت عند الخروج، فالمشكلة في 'إعدادات البطارية' وليست في الكود.")
-            if st.button("🔄 تحديث الحالة الآن"):
+            st.success("✅ البوت مرتبط الآن ويعمل بشكل تلقائي.")
+            st.info("💡 لا داعي لمسح الرمز مرة أخرى. الربط دائم حتى لو خرجت من الصفحة.")
+            if st.button("🔄 تحديث حالة الاتصال"):
                 st.rerun()
-            if st.button("🔴 قطع الارتباط نهائياً"):
-                requests.get(f"https://api.ultramsg.com/{instance}/instance/logout?token={token}")
+            with st.expander("⚠️ خيارات متقدمة"):
+                if st.button("🔴 تسجيل خروج وقطع الارتباط"):
+                    requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
+                    st.rerun()
+        
+        elif server_status in ["qr", "init", "unknown"]:
+            st.warning("⚠️ البوت يحتاج لمسح الرمز للربط.")
+            qr_url = f"https://api.ultramsg.com/{INSTANCE_ID}/instance/qr?token={API_TOKEN}&t={int(time.time())}"
+            st.image(qr_url, caption="امسحي الرمز من واتساب هاتفك", width=300)
+            if st.button("🧹 تنظيف وإصلاح الجلسة"):
+                requests.get(f"https://api.ultramsg.com/{INSTANCE_ID}/instance/logout?token={API_TOKEN}")
+                time.sleep(2)
                 st.rerun()
         else:
-            st.warning(f"⚠️ الحالة الحالية: {server_status}")
-            st.error("البوت يحتاج لمسح الرمز أو هناك جلسة معلقة.")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🧹 تنظيف الجلسة (إصلاح تعليق الرمز)"):
-                    requests.get(f"https://api.ultramsg.com/{instance}/instance/logout?token={token}")
-                    time.sleep(2)
-                    st.rerun()
-            with col2:
-                if st.button("🆕 توليد رمز جديد"):
-                    st.rerun()
-
-            qr_url = f"https://api.ultramsg.com/{instance}/instance/qr?token={token}&t={int(time.time())}"
-            st.image(qr_url, caption="امسحي الرمز من واتساب هاتفك", width=300)
-
-        st.divider()
-        st.write("⚙️ **إعدادات المسار (Webhook):**")
-        # الرابط الذي يجب وضعه في UltraMsg ليرسل الرسائل لـ PythonAnywhere
-        webhook_path = "https://amgrekhadija-amger.pythonanywhere.com/whatsapp"
-        st.code(webhook_path, language="text")
-        st.caption("تأكدي من وضع هذا الرابط في إعدادات Webhook بموقع UltraMsg.")
+            st.error(f"الحالة: {server_status}")
