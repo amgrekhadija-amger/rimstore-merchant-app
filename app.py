@@ -4,15 +4,14 @@ import uuid
 import time
 import requests
 
-# --- 1. إعدادات السحابة ثابتة ---
+# --- 1. إعدادات السحابة ---
 SUPABASE_URL = "https://pxgpkdrwsrwaldntpsca.supabase.co"
 SUPABASE_KEY = "sb_publishable_-P0AEpUa4db_HGTCQE1mhw_AWus1FBB"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# رابط البوت الثابت على PythonAnywhere
 WEBHOOK_URL = "https://khadija.pythonanywhere.com/whatsapp"
 
-# --- 2. اللغات ثابتة ---
+# --- 2. اللغات ---
 languages = {
     "العربية": {
         "dir": "rtl", "title": "RimStore",
@@ -28,7 +27,6 @@ languages = {
 st.set_page_config(page_title="RimStore", layout="wide")
 t = languages["العربية"]
 
-# دالة ذكية لضبط الربط تلقائياً ليعمل البوت 24/7
 def setup_webhook_auto(inst, tok):
     url = f"https://api.ultramsg.com/{inst}/instance/settings"
     params = {"token": tok, "webhook_url": WEBHOOK_URL, "webhook_message_received": "true"}
@@ -48,12 +46,14 @@ if not st.session_state.logged_in:
         if auth_mode == "إنشاء حساب":
             u_store = st.text_input(t["store_name"])
             if st.button("تأكيد"):
-                # إضافة التاجر مع ضبط الحالة كغير نشط في البداية
+                # استناداً لصورة جدول merchants
                 supabase.table('merchants').insert({
-                    "Phone": u_phone, "Store_name": u_store, 
-                    "password": u_pwd, "is_active": False
+                    "Phone": u_phone, 
+                    "Store_name": u_store, 
+                    "password": u_pwd, 
+                    "is_active": False
                 }).execute()
-                st.success("تم الإنشاء! انتظر تفعيل الخط من الإدارة.")
+                st.success("تم الإنشاء بنجاح!")
         else:
             if st.button("تأكيد"):
                 res = supabase.table('merchants').select("*").eq('Phone', u_phone).eq('password', u_pwd).execute()
@@ -61,18 +61,17 @@ if not st.session_state.logged_in:
                     st.session_state.logged_in = True
                     st.session_state.merchant_phone = u_phone
                     st.session_state.store_name = res.data[0]['Store_name']
-                    # تخزين بيانات الربط الخاصة بهذا التاجر تحديداً
-                    st.session_state.inst = res.data[0].get('instance_id')
-                    st.session_state.tok = res.data[0].get('api_token')
                     st.rerun()
                 else: st.error("خطأ في البيانات")
 
 # --- 4. واجهة المتجر والربط ---
 if st.session_state.logged_in:
-    # جلب البيانات المحدثة للتاجر
+    # جلب البيانات المحدثة (مراعاة حالة الأحرف في Instance_id و api_token)
     m_res = supabase.table('merchants').select("*").eq('Phone', st.session_state.merchant_phone).execute()
     m_data = m_res.data[0]
-    inst = m_data.get('instance_id')
+    
+    # تصحيح المسميات حسب صورة الجدول: Instance_id و api_token
+    inst = m_data.get('instance_id') or m_data.get('Instance_id')
     tok = m_data.get('api_token')
 
     st.sidebar.success(f"🏪 {st.session_state.store_name}")
@@ -81,7 +80,7 @@ if st.session_state.logged_in:
     with tab4:
         st.subheader("📲 حالة اتصال الواتساب")
         if not inst or not tok:
-            st.warning("جاري إعداد Instance الخاص بك من قبل الإدارة... يرجى الانتظار.")
+            st.warning("يرجى تفعيل الحساب من الإدارة (Instance ID غير موجود).")
         else:
             try:
                 status_res = requests.get(f"https://api.ultramsg.com/{inst}/instance/status?token={tok}").json()
@@ -89,20 +88,14 @@ if st.session_state.logged_in:
             except: current_status = "error"
 
             if current_status == "authenticated":
-                st.success("✅ البوت نشط ومرتبط بهاتفك الآن.")
-                # تحديث حالة التاجر في السحاب
-                supabase.table('merchants').update({"is_active": True}).eq('Phone', st.session_state.merchant_phone).execute()
-                # تفعيل الـ Webhook آلياً لضمان الرد الفوري
+                st.success("✅ البوت نشط ومرتبط.")
                 setup_webhook_auto(inst, tok)
-                
                 if st.button("🔴 تسجيل خروج الجهاز"):
                     requests.get(f"https://api.ultramsg.com/{inst}/instance/logout?token={tok}")
-                    supabase.table('merchants').update({"is_active": False}).eq('Phone', st.session_state.merchant_phone).execute()
                     st.rerun()
             else:
-                st.warning("⚠️ البوت غير متصل. امسح الرمز لمرة واحدة:")
                 qr_url = f"https://api.ultramsg.com/{inst}/instance/qr?token={tok}&t={int(time.time())}"
-                st.image(qr_url, width=300)
+                st.image(qr_url, caption="امسح الرمز للربط", width=300)
                 if st.button("🔄 تحديث"): st.rerun()
 
     with tab1:
@@ -122,31 +115,40 @@ if st.session_state.logged_in:
                     img_id = f"{uuid.uuid4()}.png"
                     supabase.storage.from_('product-images').upload(img_id, p_img.read())
                     url = supabase.storage.from_('product-images').get_public_url(img_id)
+                    # استناداً لصورة جدول products
                     supabase.table('products').insert({
-                        "Phone": st.session_state.merchant_phone, "Product": p_n, 
-                        "Price": p_p, "Size": p_size, "Color": p_color,
-                        "Status": (p_stock == t["stock_true"]), "Image_url": url
+                        "Phone": st.session_state.merchant_phone, 
+                        "Product": p_n, 
+                        "Price": p_p, 
+                        "Size": p_size,
+                        "Color": p_color,
+                        "Status": (p_stock == t["stock_true"]), 
+                        "Image_url": url
                     }).execute()
-                    st.success("تم إضافة المنتج!")
+                    st.success("تم الحفظ!")
                     st.rerun()
 
     with tab2:
-        # عرض المنتجات للتعديل والحذف
         prods = supabase.table('products').select("*").eq('Phone', st.session_state.merchant_phone).execute()
         if prods.data:
             for p in prods.data:
-                with st.expander(f"📦 {p['Product']} - {p['Price']} أوقية"):
+                with st.expander(f"📦 {p['Product']} - {p['Price']}"):
                     st.image(p['Image_url'], width=150)
                     if st.button("حذف المنتج", key=p['id']):
                         supabase.table('products').delete().eq('id', p['id']).execute()
                         st.rerun()
-        else: st.info("لا توجد منتجات حالياً.")
+        else: st.info("لا توجد منتجات.")
 
     with tab3:
         st.subheader("🛒 الطلبات الواردة")
-        # جلب الطلبات المرتبطة بـ merchant_phc (رقم التاجر)
-        orders = supabase.table('orders').select("*").eq('merchant_phc', st.session_state.merchant_phone).execute()
-        if orders.data:
-            for o in orders.data:
-                st.info(f"طلب من: {o['customer_pho']} | المنتج: {o['product_name']} | السعر: {o['total_price']}")
-        else: st.write("لا توجد طلبات جديدة.")
+        try:
+            # تصحيح هام جداً: العمود في صورتك هو merchant_phc وليس merchant_phone
+            o_res = supabase.table('orders').select("*").eq('merchant_phc', st.session_state.merchant_phone).execute()
+            if o_res.data:
+                for o in o_res.data:
+                    # تصحيح الحقول حسب صورتك: customer_pho و product_name و total_price
+                    st.info(f"طلب من: {o.get('customer_pho', 'غير معروف')} | المنتج: {o.get('product_name', 'غير محدد')} | السعر: {o.get('total_price', '0')}")
+            else:
+                st.write("لا توجد طلبات جديدة.")
+        except Exception as e:
+            st.error(f"تأكد من مطابقة أسماء الحقول في جدول الطلبات: {e}")
