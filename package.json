@@ -8,5 +8,22 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amgrekhadija-amger/rimstore-merchant-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/amgrekhadija-amger/rimstore-merchant-app/issues"
+  },
+  "homepage": "https://github.com/amgrekhadija-amger/rimstore-merchant-app#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.90.1",
+    "@whiskeysockets/baileys": "6.5.0",
+    "axios": "^1.13.2",
+    "body-parser": "^2.2.2",
+    "express": "^5.2.1",
+    "pino": "^10.2.0",
+    "qrcode-terminal": "^0.12.0"
+  }
 }
