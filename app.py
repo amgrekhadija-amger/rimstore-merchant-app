@@ -40,7 +40,7 @@ if not st.session_state.logged_in:
             l_phone = st.text_input("رقم واتساب التاجر")
             l_pass = st.text_input("كلمة السر", type="password")
             if st.form_submit_button("دخول"):
-                # التحقق من البيانات في Supabase
+                # التحقق باستخدام Phone (كبير) كما في صورتك
                 res = supabase.table('merchants').select("*").eq("Phone", l_phone).eq("password", l_pass).execute()
                 if res.data:
                     st.session_state.logged_in = True
@@ -57,10 +57,11 @@ if not st.session_state.logged_in:
             s_pass = st.text_input("كلمة سر للمتجر", type="password")
             if st.form_submit_button("إنشاء الحساب"):
                 try:
-                    supabase.table('merchants').insert({"StoreName": s_name, "Phone": s_phone, "password": s_pass}).execute()
+                    # تعديل StoreName إلى Store_name ليتطابق مع جدولك
+                    supabase.table('merchants').insert({"Store_name": s_name, "Phone": s_phone, "password": s_pass}).execute()
                     st.success("تم إنشاء الحساب بنجاح! انتقل لتسجيل الدخول.")
-                except:
-                    st.error("هذا الرقم مسجل مسبقاً")
+                except Exception as e:
+                    st.error(f"حدث خطأ: تأكد أن الرقم غير مسجل مسبقاً")
 
 else:
     # --- 5. لوحة التحكم الرئيسية بعد الدخول ---
@@ -77,29 +78,43 @@ else:
             p_colors = st.text_input("🎨 الألوان (مثال: أحمر, أزرق)")
             p_img = st.file_uploader("🖼️ رفع صورة المنتج", type=['jpg', 'png', 'jpeg'])
             if st.form_submit_button("حفظ المنتج"):
-                # هنا كود حفظ المنتج في جدول products
-                st.success(f"تمت إضافة {p_name} بنجاح!")
+                # تعديل أسماء الأعمدة لتطابق صورة جدول products
+                try:
+                    product_data = {
+                        "Product": p_name, 
+                        "Price": str(p_price), # محول لنص لأن نوعه في جدولك text
+                        "Size": p_sizes, 
+                        "Color": p_colors, 
+                        "Phone": st.session_state.merchant_phone
+                    }
+                    supabase.table('products').insert(product_data).execute()
+                    st.success(f"تمت إضافة {p_name} بنجاح!")
+                except Exception as e:
+                    st.error(f"خطأ في الحفظ: {e}")
 
     # قسم إدارة الأسعار
     with tab2:
         st.subheader("✏️ إدارة المنتجات والأسعار")
-        res_p = supabase.table('products').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
+        # البحث باستخدام عمود Phone (كبير)
+        res_p = supabase.table('products').select("*").eq("Phone", st.session_state.merchant_phone).execute()
         if res_p.data:
             df = pd.DataFrame(res_p.data)
-            # إضافة خانة الحالة (متوفر/غير متوفر)
             for index, row in df.iterrows():
                 cols = st.columns([2, 1, 1, 1])
-                cols[0].write(row['name'])
-                cols[1].write(f"{row['price']} MRU")
-                status = cols[2].selectbox("الحالة", ["متوفر", "غير متوفر"], key=f"status_{row['id']}")
+                cols[0].write(row['Product']) # تعديل name إلى Product
+                cols[1].write(f"{row['Price']} MRU") # تعديل price إلى Price
+                status = cols[2].selectbox("الحالة", ["متوفر", "غير متوفر"], index=0 if row['Status'] else 1, key=f"status_{row['id']}")
                 if cols[3].button("تحديث", key=f"btn_{row['id']}"):
-                    supabase.table('products').update({"status": status}).eq("id", row['id']).execute()
+                    new_status = True if status == "متوفر" else False
+                    supabase.table('products').update({"Status": new_status}).eq("id", row['id']).execute()
+                    st.rerun()
         else:
             st.info("لا توجد منتجات مضافة بعد.")
 
     # قسم الطلبات
     with tab3:
         st.subheader("🛒 طلبات الزبائن (من البوت)")
+        # تعديل اسم العمود إلى merchant_phone (صغير) كما في صورة جدول orders
         res_o = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
         if res_o.data:
             st.table(res_o.data)
