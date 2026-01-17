@@ -4,9 +4,10 @@ from dotenv import load_dotenv
 from supabase import create_client
 import pandas as pd
 import requests
+import time 
 
 # 1. إعداد الصفحة
-st.set_page_config(page_title="RimStore - لوحة تحكم التاجر", layout="wide")
+st.set_page_config(page_title="لوحة تحكم المتجر", layout="wide")
 
 # 2. تحميل الإعدادات
 env_path = os.path.join(os.getcwd(), '.env')
@@ -40,11 +41,12 @@ if not st.session_state.logged_in:
             l_phone = st.text_input("رقم واتساب التاجر")
             l_pass = st.text_input("كلمة السر", type="password")
             if st.form_submit_button("دخول"):
-                # التحقق باستخدام Phone (كبير) كما في صورتك
                 res = supabase.table('merchants').select("*").eq("Phone", l_phone).eq("password", l_pass).execute()
                 if res.data:
                     st.session_state.logged_in = True
                     st.session_state.merchant_phone = l_phone
+                    # تخزين اسم المتجر في الـ session لاستخدامه في العناوين
+                    st.session_state.store_name = res.data[0].get('Store_name', 'المتجر')
                     st.rerun()
                 else:
                     st.error("بيانات الدخول غير صحيحة")
@@ -57,20 +59,24 @@ if not st.session_state.logged_in:
             s_pass = st.text_input("كلمة سر للمتجر", type="password")
             if st.form_submit_button("إنشاء الحساب"):
                 try:
-                    # تعديل StoreName إلى Store_name ليتطابق مع جدولك
                     supabase.table('merchants').insert({"Store_name": s_name, "Phone": s_phone, "password": s_pass}).execute()
                     st.success("تم إنشاء الحساب بنجاح! انتقل لتسجيل الدخول.")
                 except Exception as e:
                     st.error(f"حدث خطأ: تأكد أن الرقم غير مسجل مسبقاً")
 
 else:
+    # جلب اسم المتجر المسجل
+    current_store = st.session_state.get('store_name', 'متجرك')
+
     # --- 5. لوحة التحكم الرئيسية بعد الدخول ---
-    st.title("🏪 RimStore - لوحة تحكم التاجر")
+    # هنا تم استبدال RimStore باسم المتجر الخاص بالتاجر
+    st.title(f"🏪 لوحة تحكم: {current_store}")
+    
     tab1, tab2, tab3, tab4 = st.tabs(["➕ إضافة منتج", "✏️ إدارة الأسعار", "🛒 الطلبات", "📲 ربط الواتساب"])
     
     # قسم إضافة منتج
     with tab1:
-        st.subheader("📦 إضافة بضاعة جديدة")
+        st.subheader(f"📦 إضافة بضاعة جديدة لـ {current_store}")
         with st.form("add_product", clear_on_submit=True):
             p_name = st.text_input("📍 اسم المنتج")
             p_price = st.number_input("💰 سعر المنتج", min_value=0)
@@ -78,11 +84,10 @@ else:
             p_colors = st.text_input("🎨 الألوان (مثال: أحمر, أزرق)")
             p_img = st.file_uploader("🖼️ رفع صورة المنتج", type=['jpg', 'png', 'jpeg'])
             if st.form_submit_button("حفظ المنتج"):
-                # تعديل أسماء الأعمدة لتطابق صورة جدول products
                 try:
                     product_data = {
                         "Product": p_name, 
-                        "Price": str(p_price), # محول لنص لأن نوعه في جدولك text
+                        "Price": str(p_price), 
                         "Size": p_sizes, 
                         "Color": p_colors, 
                         "Phone": st.session_state.merchant_phone
@@ -95,14 +100,13 @@ else:
     # قسم إدارة الأسعار
     with tab2:
         st.subheader("✏️ إدارة المنتجات والأسعار")
-        # البحث باستخدام عمود Phone (كبير)
         res_p = supabase.table('products').select("*").eq("Phone", st.session_state.merchant_phone).execute()
         if res_p.data:
             df = pd.DataFrame(res_p.data)
             for index, row in df.iterrows():
                 cols = st.columns([2, 1, 1, 1])
-                cols[0].write(row['Product']) # تعديل name إلى Product
-                cols[1].write(f"{row['Price']} MRU") # تعديل price إلى Price
+                cols[0].write(row['Product']) 
+                cols[1].write(f"{row['Price']} MRU") 
                 status = cols[2].selectbox("الحالة", ["متوفر", "غير متوفر"], index=0 if row['Status'] else 1, key=f"status_{row['id']}")
                 if cols[3].button("تحديث", key=f"btn_{row['id']}"):
                     new_status = True if status == "متوفر" else False
@@ -113,39 +117,49 @@ else:
 
     # قسم الطلبات
     with tab3:
-        st.subheader("🛒 طلبات الزبائن (من البوت)")
-        # تعديل اسم العمود إلى merchant_phone (صغير) كما في صورة جدول orders
+        st.subheader("🛒 طلبات الزبائن")
         res_o = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
         if res_o.data:
             st.table(res_o.data)
         else:
-            st.info("في انتظار استقبال أول طلب من البوت...")
+            st.info("في انتظار استقبال أول طلب...")
 
     # قسم ربط الواتساب
     with tab4:
         st.subheader("📲 ربط واتساب المتجر")
         merchant_id = st.session_state.merchant_phone
+        
         res = supabase.table('merchants').select('session_status, qr_code').eq('Phone', merchant_id).execute()
+        current_status = res.data[0].get('session_status') if res.data else "disconnected"
         
         col1, col2 = st.columns(2)
         with col1:
             if st.button("توليد رمز QR جديد"):
                 try:
                     requests.post(f"{MY_GATEWAY_URL}/init-session", json={"phone": merchant_id}, timeout=5)
-                    st.info("جاري تحضير الرمز... انتظر لحظة وحدث الصفحة")
+                    st.info("جاري تحضير الرمز...")
+                    time.sleep(2)
+                    st.rerun()
                 except:
                     st.error("السيرفر لا يستجيب")
             
+            if current_status == 'waiting_qr':
+                st.warning("⚠️ الصفحة ستتحدث تلقائياً كل 10 ثوانٍ لظهار الرمز.")
+                time.sleep(10)
+                st.rerun()
+
             if res.data and res.data[0].get('qr_code'):
-                qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={res.data[0].get('qr_code')}"
-                st.image(qr_url, caption="امسح الرمز لربط متجرك")
+                qr_code_raw = res.data[0].get('qr_code')
+                qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qr_code_raw}"
+                st.image(qr_url, caption=f"امسح الرمز لربط {current_store}")
 
         with col2:
-            status = res.data[0].get('session_status') if res.data else "disconnected"
-            if status == 'connected':
-                st.success("✅ متصل الآن - البوت يعمل لديك")
+            if current_status == 'connected':
+                st.success(f"✅ متصل الآن - بوت {current_store} يعمل")
+            elif current_status == 'waiting_qr':
+                st.info("⌛ في انتظار مسح الرمز...")
             else:
-                st.warning("❌ غير متصل حالياً")
+                st.error("❌ غير متصل حالياً")
 
     if st.sidebar.button("تسجيل الخروج"):
         st.session_state.logged_in = False
