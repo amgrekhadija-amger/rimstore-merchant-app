@@ -45,7 +45,6 @@ if not st.session_state.logged_in:
                 if res.data:
                     st.session_state.logged_in = True
                     st.session_state.merchant_phone = l_phone
-                    # تخزين اسم المتجر في الـ session لاستخدامه في العناوين
                     st.session_state.store_name = res.data[0].get('Store_name', 'المتجر')
                     st.rerun()
                 else:
@@ -65,11 +64,7 @@ if not st.session_state.logged_in:
                     st.error(f"حدث خطأ: تأكد أن الرقم غير مسجل مسبقاً")
 
 else:
-    # جلب اسم المتجر المسجل
     current_store = st.session_state.get('store_name', 'متجرك')
-
-    # --- 5. لوحة التحكم الرئيسية بعد الدخول ---
-    # هنا تم استبدال RimStore باسم المتجر الخاص بالتاجر
     st.title(f"🏪 لوحة تحكم: {current_store}")
     
     tab1, tab2, tab3, tab4 = st.tabs(["➕ إضافة منتج", "✏️ إدارة الأسعار", "🛒 الطلبات", "📲 ربط الواتساب"])
@@ -124,13 +119,14 @@ else:
         else:
             st.info("في انتظار استقبال أول طلب...")
 
-    # قسم ربط الواتساب
+    # قسم ربط الواتساب (التعديل هنا)
     with tab4:
         st.subheader("📲 ربط واتساب المتجر")
         merchant_id = st.session_state.merchant_phone
         
         res = supabase.table('merchants').select('session_status, qr_code').eq('Phone', merchant_id).execute()
         current_status = res.data[0].get('session_status') if res.data else "disconnected"
+        qr_val = res.data[0].get('qr_code') if res.data else None
         
         col1, col2 = st.columns(2)
         with col1:
@@ -143,24 +139,19 @@ else:
                 except:
                     st.error("السيرفر لا يستجيب")
             
+            # إذا كان التاجر في مرحلة الانتظار، نحدث الصفحة تلقائياً
             if current_status == 'waiting_qr':
-                st.warning("⚠️ الصفحة ستتحدث تلقائياً كل 10 ثوانٍ لظهار الرمز.")
+                st.warning("⚠️ الصفحة ستتحدث تلقائياً لظهار الرمز الجديد.")
                 time.sleep(10)
                 st.rerun()
 
-            if res.data and res.data[0].get('qr_code'):
-                qr_code_raw = res.data[0].get('qr_code')
-                qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qr_code_raw}"
-                st.image(qr_url, caption=f"امسح الرمز لربط {current_store}")
+            # التحقق مما إذا كان المحتوى هو "نجاح الربط" أو "رمز QR"
+            if qr_val:
+                if qr_val == "LINKED_SUCCESSFULLY":
+                    st.success(f"🎊 مبروك! تم ربط واتساب {current_store} بنجاح.")
+                else:
+                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qr_val}"
+                    st.image(qr_url, caption=f"امسح الرمز لربط {current_store}")
 
         with col2:
-            if current_status == 'connected':
-                st.success(f"✅ متصل الآن - بوت {current_store} يعمل")
-            elif current_status == 'waiting_qr':
-                st.info("⌛ في انتظار مسح الرمز...")
-            else:
-                st.error("❌ غير متصل حالياً")
-
-    if st.sidebar.button("تسجيل الخروج"):
-        st.session_state.logged_in = False
-        st.rerun()
+            if current_status == 'connected' or qr_val == "LINKED_SUCCESSFULLY":
