@@ -119,11 +119,12 @@ else:
         else:
             st.info("في انتظار استقبال أول طلب...")
 
-    # قسم ربط الواتساب
+    # قسم ربط الواتساب (التعديل هنا لضمان عدم التعليق)
     with tab4:
         st.subheader("📲 ربط واتساب المتجر")
         merchant_id = st.session_state.merchant_phone
         
+        # جلب البيانات من Supabase أولاً
         res = supabase.table('merchants').select('session_status, qr_code').eq('Phone', merchant_id).execute()
         current_status = res.data[0].get('session_status') if res.data else "disconnected"
         qr_val = res.data[0].get('qr_code') if res.data else None
@@ -132,27 +133,29 @@ else:
         with col1:
             if st.button("توليد رمز QR جديد"):
                 try:
-                    requests.post(f"{MY_GATEWAY_URL}/init-session", json={"phone": merchant_id}, timeout=5)
-                    st.info("جاري تحضير الرمز...")
-                    time.sleep(2)
-                    st.rerun()
+                    # تقليل الـ timeout لعدم جعل الصفحة تعلق
+                    requests.post(f"{MY_GATEWAY_URL}/init-session", json={"phone": merchant_id}, timeout=2)
+                    st.info("جاري طلب رمز جديد...")
                 except:
-                    st.error("السيرفر لا يستجيب")
-            
-            if current_status == 'waiting_qr':
-                st.warning("⚠️ الصفحة ستتحدث تلقائياً لإظهار الرمز الجديد.")
-                time.sleep(10)
+                    # حتى لو فشل الطلب، سنخبر المستخدم أننا سنراقب قاعدة البيانات
+                    st.warning("السيرفر مشغول، جاري محاولة جلب الرمز من القاعدة...")
+                time.sleep(1)
                 st.rerun()
-
+            
+            # عرض الرمز فور توفره في Supabase
             if qr_val:
                 if qr_val == "LINKED_SUCCESSFULLY":
                     st.success(f"🎊 مبروك! تم ربط واتساب {current_store} بنجاح.")
                 else:
                     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qr_val}"
                     st.image(qr_url, caption=f"امسح الرمز لربط {current_store}")
+            
+            if current_status == 'waiting_qr':
+                st.info("⌛ في انتظار تحديث الرمز من السيرفر...")
+                time.sleep(5)
+                st.rerun()
 
         with col2:
-            # هنا تم تصحيح الإزاحة وكتابة محتوى الشرط المفقود
             if current_status == 'connected' or qr_val == "LINKED_SUCCESSFULLY":
                 st.success(f"✅ متصل الآن - البوت يعمل")
             elif current_status == 'waiting_qr':
