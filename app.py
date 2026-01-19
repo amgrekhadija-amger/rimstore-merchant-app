@@ -119,47 +119,50 @@ else:
         else:
             st.info("في انتظار استقبال أول طلب...")
 
-    # قسم ربط الواتساب (التعديل هنا لضمان عدم التعليق)
+    # قسم ربط الواتساب (تمت إضافة التعديلات الاحترافية هنا)
     with tab4:
         st.subheader("📲 ربط واتساب المتجر")
         merchant_id = st.session_state.merchant_phone
         
-        # جلب البيانات من Supabase أولاً
-        res = supabase.table('merchants').select('session_status, qr_code').eq('Phone', merchant_id).execute()
-        current_status = res.data[0].get('session_status') if res.data else "disconnected"
-        qr_val = res.data[0].get('qr_code') if res.data else None
+        # التعديل 1: استخدام .single() لضمان جلب بيانات التاجر الحالي فقط ومنع تداخل الأرقام
+        try:
+            res = supabase.table('merchants').select('session_status, qr_code').eq('Phone', merchant_id).single().execute()
+            current_status = res.data.get('session_status') if res.data else "disconnected"
+            qr_val = res.data.get('qr_code') if res.data else None
+        except:
+            current_status = "disconnected"
+            qr_val = None
         
         col1, col2 = st.columns(2)
         with col1:
             if st.button("توليد رمز QR جديد"):
                 try:
-                    # تقليل الـ timeout لعدم جعل الصفحة تعلق
                     requests.post(f"{MY_GATEWAY_URL}/init-session", json={"phone": merchant_id}, timeout=2)
                     st.info("جاري طلب رمز جديد...")
                 except:
-                    # حتى لو فشل الطلب، سنخبر المستخدم أننا سنراقب قاعدة البيانات
-                    st.warning("السيرفر مشغول، جاري محاولة جلب الرمز من القاعدة...")
-                time.sleep(1)
+                    st.warning("السيرفر يعالج الطلب، سيظهر الرمز من القاعدة فوراً")
+                time.sleep(2)
                 st.rerun()
             
-            # عرض الرمز فور توفره في Supabase
             if qr_val:
                 if qr_val == "LINKED_SUCCESSFULLY":
                     st.success(f"🎊 مبروك! تم ربط واتساب {current_store} بنجاح.")
                 else:
-                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qr_val}"
+                    # التعديل 2: إضافة Timestamp (t=) لكسر التخزين المؤقت ومنع ظهور رموز قديمة منتهية الصلاحية
+                    ts = int(time.time())
+                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qr_val}&t={ts}"
                     st.image(qr_url, caption=f"امسح الرمز لربط {current_store}")
             
             if current_status == 'waiting_qr':
-                st.info("⌛ في انتظار تحديث الرمز من السيرفر...")
-                time.sleep(5)
+                st.info("⌛ في انتظار مسح الرمز من هاتفك...")
+                time.sleep(10) # تحديث كل 10 ثوانٍ لفحص النجاح
                 st.rerun()
 
         with col2:
             if current_status == 'connected' or qr_val == "LINKED_SUCCESSFULLY":
                 st.success(f"✅ متصل الآن - البوت يعمل")
             elif current_status == 'waiting_qr':
-                st.info("⌛ في انتظار مسح الرمز...")
+                st.info("⌛ الرمز جاهز للمسح")
             else:
                 st.error("❌ غير متصل حالياً")
 
