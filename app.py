@@ -119,52 +119,63 @@ else:
         else:
             st.info("في انتظار استقبال أول طلب...")
 
-    # قسم ربط الواتساب (تمت إضافة التعديلات الاحترافية هنا)
+    # قسم ربط الواتساب (تعديل: عدم الحفظ في القاعدة إلا عند النجاح)
     with tab4:
         st.subheader("📲 ربط واتساب المتجر")
         merchant_id = st.session_state.merchant_phone
         
-        # التعديل 1: استخدام .single() لضمان جلب بيانات التاجر الحالي فقط ومنع تداخل الأرقام
         try:
             res = supabase.table('merchants').select('session_status, qr_code').eq('Phone', merchant_id).single().execute()
             current_status = res.data.get('session_status') if res.data else "disconnected"
-            qr_val = res.data.get('qr_code') if res.data else None
+            saved_qr = res.data.get('qr_code') if res.data else None
         except:
             current_status = "disconnected"
-            qr_val = None
+            saved_qr = None
         
         col1, col2 = st.columns(2)
         with col1:
             if st.button("توليد رمز QR جديد"):
                 try:
+                    # تصفير البيانات في القاعدة فوراً لضمان النظافة
+                    supabase.table('merchants').update({"qr_code": None, "session_status": "initializing"}).eq("Phone", merchant_id).execute()
                     requests.post(f"{MY_GATEWAY_URL}/init-session", json={"phone": merchant_id}, timeout=2)
-                    st.info("جاري طلب رمز جديد...")
+                    st.info("جاري طلب رمز حي من السيرفر...")
                 except:
-                    st.warning("السيرفر يعالج الطلب، سيظهر الرمز من القاعدة فوراً")
+                    st.warning("السيرفر مشغول، يرجى الانتظار قليلاً")
                 time.sleep(2)
                 st.rerun()
             
-            if qr_val:
-                if qr_val == "LINKED_SUCCESSFULLY":
-                    st.success(f"🎊 مبروك! تم ربط واتساب {current_store} بنجاح.")
-                else:
-                    # التعديل 2: إضافة Timestamp (t=) لكسر التخزين المؤقت ومنع ظهور رموز قديمة منتهية الصلاحية
-                    ts = int(time.time())
-                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qr_val}&t={ts}"
-                    st.image(qr_url, caption=f"امسح الرمز لربط {current_store}")
-            
-            if current_status == 'waiting_qr':
-                st.info("⌛ في انتظار مسح الرمز من هاتفك...")
-                time.sleep(10) # تحديث كل 10 ثوانٍ لفحص النجاح
+            # التعديل الرئيسي: إذا كانت الحالة انتظار، نجلب الرمز من السيرفر (ذاكرة البوت) وليس من القاعدة
+            if current_status == 'waiting_qr' or current_status == 'initializing':
+                try:
+                    # طلب الرمز المؤقت من السيرفر مباشرة
+                    qr_res = requests.get(f"{MY_GATEWAY_URL}/get-qr/{merchant_id}", timeout=2)
+                    if qr_res.status_code == 200:
+                        live_qr = qr_res.json().get('qr')
+                        ts = int(time.time())
+                        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={live_qr}&t={ts}"
+                        st.image(qr_url, caption="امسح هذا الرمز للربط (غير محفوظ في القاعدة حالياً)")
+                    else:
+                        st.info("⌛ في انتظار توليد الرمز من السيرفر...")
+                except:
+                    st.error("السيرفر لا يستجيب لطلب الرمز الحي")
+                
+                time.sleep(10)
                 st.rerun()
 
+            # عرض الرمز من القاعدة فقط إذا كان الربط قد نجح (شهادة النجاح)
+            if saved_qr and current_status == 'connected':
+                st.success(f"✅ تم الربط بنجاح بالرمز: {saved_qr[:15]}...")
+            elif current_status == 'disconnected':
+                st.error("🔴 المتجر غير مرتبط حالياً")
+
         with col2:
-            if current_status == 'connected' or qr_val == "LINKED_SUCCESSFULLY":
+            if current_status == 'connected':
                 st.success(f"✅ متصل الآن - البوت يعمل")
             elif current_status == 'waiting_qr':
-                st.info("⌛ الرمز جاهز للمسح")
+                st.warning("⌛ بانتظار مسح الرمز من هاتفك")
             else:
-                st.error("❌ غير متصل حالياً")
+                st.info("يرجى البدء بتوليد رمز جديد")
 
     if st.sidebar.button("تسجيل الخروج"):
         st.session_state.logged_in = False
