@@ -1,4 +1,4 @@
-Require('dotenv').config(); 
+require('dotenv').config(); 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const { Boom } = require("@hapi/boom");
@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 let sessions = {}; 
-let lastTempQR = {}; // مخزن مؤقت للرموز في الذاكرة فقط وليس في القاعدة
+let lastTempQR = {}; // مخزن الرموز الحية التي يطلبها Streamlit
 
 async function connectToWhatsApp(merchantPhone) {
     const sessionPath = `./sessions/session-${merchantPhone}`;
@@ -32,11 +32,9 @@ async function connectToWhatsApp(merchantPhone) {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log(`📡 رمز جديد تولد للرقم: ${merchantPhone} (محفوظ في الذاكرة فقط)`);
-            // حفظ الرمز في الذاكرة المؤقتة للسيرفر فقط ليعرضه Streamlit
-            lastTempQR[merchantPhone] = qr; 
+            // تخزين الرمز في الذاكرة ليرسله السيرفر لـ Streamlit عند الطلب
+            lastTempQR[merchantPhone] = qr;
             
-            // تحديث الحالة فقط في القاعدة دون لمس عمود الـ qr_code
             await supabase.from('merchants').update({ 
                 session_status: 'waiting_qr' 
             }).eq('Phone', merchantPhone);
@@ -44,15 +42,12 @@ async function connectToWhatsApp(merchantPhone) {
 
         if (connection === "close") {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
-            console.log(`📡 انقطع الاتصال للرقم ${merchantPhone}. السبب: ${statusCode}`);
-
             if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                 if (fs.existsSync(sessionPath)) {
                     fs.rmSync(sessionPath, { recursive: true, force: true });
                 }
             }
-
-            // عند الانقطاع أو الفشل، نتأكد أن العمود فارغ
+            delete lastTempQR[merchantPhone];
             await supabase.from('merchants').update({ 
                 session_status: 'disconnected',
                 qr_code: null 
@@ -60,50 +55,45 @@ async function connectToWhatsApp(merchantPhone) {
         } 
         
         else if (connection === "open") {
-            console.log(`✅ نجاح الربط للرقم: ${merchantPhone}`);
-            
-            // الآن فقط، وبعد النجاح، نحفظ الرمز في القاعدة كدليل
-            const successfulQR = lastTempQR[merchantPhone] || "LINKED_SUCCESSFULLY";
-            
+            // الآن فقط يتم حفظ الرمز الناجح في القاعدة
+            const finalQR = lastTempQR[merchantPhone] || "SUCCESS";
             await supabase.from('merchants').update({ 
                 session_status: 'connected', 
-                qr_code: successfulQR // حفظ الرمز الذي أدى للنجاح فقط
+                qr_code: finalQR 
             }).eq('Phone', merchantPhone);
-            
-            delete lastTempQR[merchantPhone]; // تنظيف الذاكرة المؤقتة
+            delete lastTempQR[merchantPhone];
         }
     });
 
     sock.ev.on("creds.update", saveCreds);
 }
 
-// إضافة API جديد ليتمكن Streamlit من رؤية الرمز دون أن يكون في القاعدة
-app.get("/get-qr/:phone", (res, req) => {
+// --- التعديل المطلوب لحل خطأ "السيرفر لا يستجيب" ---
+app.get("/get-qr/:phone", (req, res) => {
     const phone = req.params.phone;
     const qr = lastTempQR[phone];
     if (qr) {
         res.json({ qr: qr });
     } else {
-        res.status(404).json({ message: "No active QR" });
+        res.status(404).json({ error: "No active QR found" });
     }
 });
+// ------------------------------------------------
 
 app.post("/init-session", async (req, res) => {
     const { phone } = req.body;
-    if (!phone) return res.status(400).send("Phone is required");
+    if (!phone) return res.status(400).send("Phone required");
     
     if (sessions[phone]) {
-        try { sessions[phone].logout(); } catch (e) {}
+        try { sessions[phone].end(); } catch (e) {}
         delete sessions[phone];
     }
     
-    // تصفير العمود عند كل محاولة جديدة لضمان النظافة التي طلبتِها
     await supabase.from('merchants').update({ qr_code: null }).eq('Phone', phone);
-    
     connectToWhatsApp(phone);
-    res.send("Initialization triggered");
+    res.send("Session Init Started");
 });
 
 app.listen(3000, "0.0.0.0", () => {
-    console.log(`🚀 Gateway Active on Port 3000`);
+    console.log(`🚀 Gateway Running on Port 3000`);
 });
