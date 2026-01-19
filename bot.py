@@ -5,7 +5,7 @@ import requests
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# --- 1. تحميل الإعدادات من ملف .env ---
+# --- 1. تحميل الإعدادات ---
 load_dotenv()
 
 app = Flask(__name__)
@@ -20,33 +20,54 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-pro')
 
-# إعدادات السيرفر الخاص (الاتصال داخلياً بالـ Node.js)
-MY_GATEWAY_URL = os.getenv("MY_GATEWAY_URL", "http://localhost:3000")
+# إعدادات Evolution API الجديد
+EVO_URL = "http://localhost:8080"
+EVO_API_KEY = "123456"  # تأكدي أنه نفس الكود في السيرفر
 
-@app.route("/whatsapp", methods=['POST'])
+@app.route("/webhook", methods=['POST']) # قمنا بتغيير المسار ليكون متوافقاً مع Webhook
 def whatsapp_reply():
     data = request.json
-    if not data or 'data' not in data:
-        return "No Data", 200
     
-    msg_data = data['data']
-    incoming_msg = msg_data.get('body', '').strip().lower()
-    customer_num = msg_data.get('from', '') 
-    merchant_num = msg_data.get('merchant', '').split('@')[0]
+    # التأكد من أن الحدث هو رسالة جديدة (تنسيق Evolution API)
+    if not data or data.get('event') != 'messages.upsert':
+        return "Not a message event", 200
+    
+    message_data = data.get('data', {})
+    instance_name = data.get('instance') # اسم الجلسة (مثلاً merchant_222422...)
+    
+    # استخراج نص الرسالة ورقم الزبون
+    # Evolution API يرسل الرسالة في هيكل متداخل
+    msg_obj = message_data.get('message', {})
+    incoming_msg = ""
+    
+    if 'conversation' in msg_obj:
+        incoming_msg = msg_obj['conversation']
+    elif 'extendedTextMessage' in msg_obj:
+        incoming_msg = msg_obj['extendedTextMessage'].get('text', '')
+        
+    incoming_msg = incoming_msg.strip().lower()
+    customer_num = message_data.get('key', {}).get('remoteJid')
+    
+    # معرفة رقم التاجر من اسم الـ instance
+    merchant_num = instance_name.replace('merchant_', '')
 
-    # --- الجزء 1: الردود الترحيبية الثابتة بالحسانية (لا تغيير هنا) ---
+    if not incoming_msg:
+        return "Empty message", 200
+
+    # --- الجزء 1: الردود الترحيبية الثابتة بالحسانية ---
     greetings = ['سلام عليكم', 'السلام عليكم', 'سلام', 'مرحب']
     if any(word in incoming_msg for word in greetings):
-        send_text_message(customer_num, "عليكم وسلام ومرحب بيك في RimStore.")
+        send_text_message(instance_name, customer_num, "عليكم وسلام ومرحب بيك في RimStore.")
         return "OK", 200
     
     status_queries = ['شحالكم', 'شحالك', 'شخبارك', 'خبارك']
     if any(word in incoming_msg for word in status_queries):
-        send_text_message(customer_num, "لباس ماشاء مافين حد حاس بشي الحمدالله.")
+        send_text_message(instance_name, customer_num, "لباس ماشاء مافين حد حاس بشي الحمدالله.")
         return "OK", 200
 
     # --- الجزء 2: معالجة الطلبات والبحث عبر Gemini ---
     try:
+        # جلب منتجات التاجر بناءً على رقمه
         res = supabase.table('products').select("*").eq('Phone', merchant_num).execute()
         products_list = res.data if res.data else []
 
@@ -65,34 +86,32 @@ def whatsapp_reply():
 
         response = model.generate_content(prompt)
         reply_text = response.text
-        send_text_message(customer_num, reply_text)
+        send_text_message(instance_name, customer_num, reply_text)
         
-        for p in products_list:
-            if p['Product'].lower() in incoming_msg and p.get('Image_url'):
-                send_image_message(customer_num, p['Product'], p['Image_url'])
-                break
     except Exception as e:
         print(f"Error: {e}")
-        send_text_message(customer_num, "المعذرة، عدل خطأ فالسيرفر، جرب شوي ثانية.")
+        send_text_message(instance_name, customer_num, "المعذرة، عدل خطأ فالسيرفر، جرب شوي ثانية.")
 
     return "OK", 200
 
-# --- دالات الإرسال ---
-def send_text_message(to, body):
-    url = f"{MY_GATEWAY_URL}/send-text"
-    payload = {"to": to, "message": body}
+# --- دالات الإرسال المعدلة لتناسب Evolution API ---
+def send_text_message(instance, to, body):
+    url = f"{EVO_URL}/message/sendText/{instance}"
+    headers = {
+        "apikey": EVO_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "number": to,
+        "text": body,
+        "delay": 1200, # تأخير بسيط لتبدو كأنها كتابة بشرية
+        "linkPreview": True
+    }
     try:
-        requests.post(url, json=payload, timeout=5)
-    except:
-        print("❌ فشل الاتصال ببوابة الواتساب (Node.js Server)")
-
-def send_image_message(to, caption, image_url):
-    url = f"{MY_GATEWAY_URL}/send-text"
-    payload = {"to": to, "message": f"🖼️ {caption}\nرابط الصورة: {image_url}"}
-    try:
-        requests.post(url, json=payload, timeout=5)
-    except:
-        pass
+        requests.post(url, json=payload, headers=headers, timeout=10)
+    except Exception as e:
+        print(f"❌ فشل الإرسال عبر Evolution API: {e}")
 
 if __name__ == "__main__":
+    # تشغيل البوت على منفذ 5000
     app.run(host="0.0.0.0", port=5000)
