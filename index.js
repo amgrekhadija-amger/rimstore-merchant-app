@@ -13,16 +13,18 @@ app.use(express.json());
 let sessions = {}; 
 
 async function connectToWhatsApp(merchantPhone) {
-    const sessionPath = `./sessions/${merchantPhone}`;
+    // 1. استخدام مسار ديناميكي فريد لكل تاجر لضمان عدم تداخل الملفات
+    const sessionPath = `./sessions/session-${merchantPhone}`;
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         auth: state,
         version,
-        printQRInTerminal: false, // تم إيقافه للاعتماد على قاعدة البيانات فقط
+        printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        browser: ["RimStore", "Chrome", "1.0.0"] 
+        // 2. التعديل الاحترافي: جعل اسم المتصفح فريداً لكل رقم هاتف لمنع الرفض من واتساب
+        browser: ["RimStore", `Merchant-${merchantPhone}`, "1.0.0"] 
     });
 
     sessions[merchantPhone] = sock;
@@ -30,9 +32,9 @@ async function connectToWhatsApp(merchantPhone) {
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // 1. عند توليد رمز QR (مرحلة الانتظار)
         if (qr) {
-            console.log(`📡 تحديث الرمز المؤقت للرقم: ${merchantPhone}`);
+            console.log(`📡 تحديث الرمز للرقم: ${merchantPhone}`);
+            // تحديث الرمز والتأكد من تصفير الحالات القديمة لضمان نظافة البيانات
             await supabase.from('merchants').update({ 
                 qr_code: qr, 
                 session_status: 'waiting_qr' 
@@ -45,8 +47,9 @@ async function connectToWhatsApp(merchantPhone) {
 
             console.log(`📡 انقطع الاتصال للرقم ${merchantPhone}. السبب: ${statusCode}`);
 
+            // 3. تنظيف احترافي: مسح المجلد فقط في حالة الخروج النهائي
             if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                console.log("⚠️ تنظيف الجلسة التالفة...");
+                console.log("⚠️ تنظيف الجلسة التالفة نهائياً...");
                 if (fs.existsSync(sessionPath)) {
                     fs.rmSync(sessionPath, { recursive: true, force: true });
                 }
@@ -56,18 +59,15 @@ async function connectToWhatsApp(merchantPhone) {
                 connectToWhatsApp(merchantPhone);
             }
             
-            // عند الانقطاع، نفرغ عمود الـ QR
             await supabase.from('merchants').update({ 
                 session_status: 'disconnected',
                 qr_code: null 
             }).eq('Phone', merchantPhone);
         } 
         
-        // 2. عند نجاح الربط (هذا هو التعديل المطلوب)
         else if (connection === "open") {
-            console.log(`✅ تم الربط بنجاح للتاجر: ${merchantPhone}`);
-            
-            // تخزين تأكيد النجاح فقط في عمود qr_code
+            console.log(`✅ نجاح الربط: ${merchantPhone}`);
+            // إرسال إشارة النجاح النهائية لـ Streamlit
             await supabase.from('merchants').update({ 
                 session_status: 'connected', 
                 qr_code: 'LINKED_SUCCESSFULLY' 
@@ -80,13 +80,18 @@ async function connectToWhatsApp(merchantPhone) {
 
 app.post("/init-session", async (req, res) => {
     const { phone } = req.body;
-    if (!phone) return res.status(400).send("Phone number is required");
+    if (!phone) return res.status(400).send("Phone is required");
     
-    // مسح أي رمز قديم قبل البدء لضمان عدم التضارب
+    // 4. خطوة احترافية: إغلاق أي جلسة قديمة لنفس الرقم في الذاكرة قبل بدء جلسة جديدة
+    if (sessions[phone]) {
+        try { sessions[phone].logout(); } catch (e) {}
+        delete sessions[phone];
+    }
+    
     await supabase.from('merchants').update({ qr_code: null }).eq('Phone', phone);
     
     connectToWhatsApp(phone);
-    res.send("Session initialization started");
+    res.send("Initialization triggered");
 });
 
 app.listen(3000, "0.0.0.0", () => {
