@@ -6,31 +6,28 @@ import pandas as pd
 import requests
 import time
 import base64
-from PIL import Image
-import io
 
 # 1. إعداد الصفحة
-st.set_page_config(page_title="لوحة تحكم المتجر المتطورة", layout="wide")
+st.set_page_config(page_title="لوحة تحكم المتجر المتطورة - WPP", layout="wide")
 
-# 2. تحميل الإعدادات من ملف .env الموجود على السيرفر
+# 2. تحميل الإعدادات
 load_dotenv() 
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-EVO_URL = os.getenv("EVO_URL", "http://127.0.0.1:8080")
-EVO_API_KEY = os.getenv("EVO_API_KEY", "123456") 
+WPP_URL = os.getenv("WPP_URL", "http://127.0.0.1:2136")
+SECRET_KEY = os.getenv("SECRET_KEY", "THISISMYSECUREKEY")
 
 # 3. الاتصال بقاعدة البيانات
 try:
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("⚠️ ملف .env ناقص أو غير موجود في السيرفر")
+        st.error("⚠️ ملف .env ناقص أو غير موجود")
         st.stop()
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error(f"❌ خطأ في الاتصال بـ Supabase: {e}")
     st.stop()
 
-# --- واجهة المستخدم ---
+# --- واجهة المستخدم (الدخول والتسجيل تبقى كما هي) ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
@@ -46,12 +43,11 @@ if not st.session_state.logged_in:
             
             if st.form_submit_button("إنشاء الحساب"):
                 check = supabase.table('merchants').select("Phone").eq("Phone", s_phone).execute()
-                if check.data:
-                    st.error("❌ هذا الرقم مسجل مسبقاً!")
+                if check.data: st.error("❌ هذا الرقم مسجل مسبقاً!")
                 elif s_merchant_name and s_store_name and s_phone and s_pass:
                     supabase.table('merchants').insert({
                         "Merchant_name": s_merchant_name, "Store_name": s_store_name, 
-                        "Phone": s_phone, "password": s_pass, "is_active": True
+                        "Phone": s_phone, "password": s_pass, "session_status": "disconnected"
                     }).execute()
                     st.success("✅ تم إنشاء الحساب!")
                 else: st.warning("اكمل البيانات")
@@ -73,7 +69,9 @@ else:
     st.title(f"🏪 متجر: {st.session_state.store_name}")
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
+    # --- تبويب إضافة المنتج ---
     with t1:
+        # فحص حالة الربط من قاعدة البيانات
         status_db = supabase.table('merchants').select("session_status").eq("Phone", st.session_state.merchant_phone).execute()
         is_linked = status_db.data and status_db.data[0].get('session_status') == "connected"
 
@@ -94,65 +92,32 @@ else:
                 }).execute()
                 st.success("تم الحفظ!")
 
-    with t3:
-        st.subheader("الطلبات الواردة")
-        ords = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
-        if ords.data: st.table(pd.DataFrame(ords.data)[['customer_phone', 'product_name', 'total_price', 'status']])
-
+    # --- تبويب ربط الواتساب (التعديل الجذري لـ WPP) ---
     with t4:
-        st.subheader("ربط الواتساب")
-        # التعديل: تغيير اسم الجلسة إلى v2 لتجاوز أخطاء الـ state القديمة
-        inst = f"v2_{st.session_state.merchant_phone}"
-        headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
+        st.subheader("ربط الواتساب (WPPConnect)")
+        session_id = f"store_{st.session_state.merchant_phone}"
+        headers = {"Authorization": f"Bearer {SECRET_KEY}", "Content-Type": "application/json"}
 
-        if st.button("🔄 توليد رمز QR جديد"):
-            # الخطوة 1: حذف الجلسة القديمة لتنظيف الذاكرة تماماً
-            try: requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers, timeout=5)
-            except: pass
-            time.sleep(1) 
-            
-            # الخطوة 2: إنشاء الجلسة بطلب بسيط جداً
-            create_payload = {
-                "instanceName": inst,
-                "token": "123456",
-                "integration": "WHATSAPP-BAILEYS",
-                "qrcode": True
-            }
-            
-            response = requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
-            
-            if response.status_code in [200, 201]:
-                # الخطوة 3: ضبط الـ Webhook بشكل منفصل
-                webhook_payload = {
-                    "enabled": True,
-                    "url": "http://46.224.250.252:5000/webhook",
-                    "webhook_by_events": False,
-                    "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE"]
-                }
-                requests.post(f"{EVO_URL}/webhook/set/{inst}", json=webhook_payload, headers=headers)
-                
-                st.session_state.qr_time = time.time()
+        if st.button("🔄 توليد رمز QR الجديد"):
+            with st.spinner("جاري بدء الجلسة..."):
+                # 1. بدء الجلسة
+                requests.post(f"{WPP_URL}/api/{session_id}/start-session", headers=headers)
+                st.session_state.show_qr = True
                 st.rerun()
-            else:
-                st.error(f"خطأ في الطلب: {response.text}")
 
-        if 'qr_time' in st.session_state:
-            elapsed = time.time() - st.session_state.qr_time
-            if elapsed > 40:
-                st.error("انتهت الصلاحية! يرجى التوليد مرة أخرى.")
-                del st.session_state.qr_time
-            else:
-                qr_res = requests.get(f"{EVO_URL}/instance/connect/{inst}", headers=headers)
-                if qr_res.status_code == 200:
-                    qr_data = qr_res.json()
-                    qr_base64 = qr_data.get('base64') or qr_data.get('code')
-                    if qr_base64:
-                        img_b64 = qr_base64.split(",")[1] if "," in qr_base64 else qr_base64
-                        st.image(base64.b64decode(img_b64), caption=f"امسح الرمز الآن (المتبقي: {int(40-elapsed)} ثانية)")
-                
-                chk = requests.get(f"{EVO_URL}/instance/connectionState/{inst}", headers=headers)
-                if chk.status_code == 200 and chk.json().get('instance', {}).get('state') == "open":
-                    supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", st.session_state.merchant_phone).execute()
-                    st.success("✅ تم الربط بنجاح!")
-                    del st.session_state.qr_time
-                    st.rerun()
+        if st.session_state.get('show_qr'):
+            qr_url = f"{WPP_URL}/api/{session_id}/qrcode-session"
+            qr_res = requests.get(qr_url, headers=headers)
+            
+            if qr_res.status_code == 200:
+                st.image(qr_res.content, caption="امسح الرمز الآن")
+            
+            # فحص الحالة
+            check_url = f"{WPP_URL}/api/{session_id}/check-connection-session"
+            status_res = requests.get(check_url, headers=headers).json()
+            
+            if status_res.get('status') is True:
+                supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", st.session_state.merchant_phone).execute()
+                st.success("✅ تم الربط بنجاح!")
+                st.session_state.show_qr = False
+                st.rerun()
