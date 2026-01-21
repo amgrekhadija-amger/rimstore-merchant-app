@@ -1,158 +1,141 @@
-import streamlit as st
 import os
-from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 from supabase import create_client
-import pandas as pd
 import requests
-import time
+import google.generativeai as genai
+from dotenv import load_dotenv
 import base64
-from PIL import Image
-import io
 
-# 1. إعداد الصفحة
-st.set_page_config(page_title="لوحة تحكم المتجر المتطورة", layout="wide")
+# --- 1. إعداد البيئة ---
+load_dotenv()
+app = Flask(__name__)
 
-# 2. تحميل الإعدادات من ملف .env الموجود على السيرفر
-load_dotenv() 
-
+# إعدادات Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# إعدادات Gemini
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-pro')
+
+# إعدادات Evolution API
 EVO_URL = os.getenv("EVO_URL", "http://127.0.0.1:8080")
-EVO_API_KEY = os.getenv("EVO_API_KEY", "123456") 
+EVO_API_KEY = os.getenv("EVO_API_KEY", "123456")
 
-# 3. الاتصال بقاعدة البيانات
-try:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("⚠️ ملف .env ناقص أو غير موجود في السيرفر")
-        st.stop()
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.error(f"❌ خطأ في الاتصال بـ Supabase: {e}")
-    st.stop()
+# --- دالات الإرسال ---
 
-# --- واجهة المستخدم ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
+def send_text(instance, to, body):
+    url = f"{EVO_URL}/message/sendText/{instance}"
+    headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
+    payload = {"number": to, "text": body, "delay": 500}
+    try:
+        requests.post(url, json=payload, headers=headers)
+    except Exception as e:
+        print(f"Error sending text: {e}")
 
-if not st.session_state.logged_in:
-    tab_login, tab_signup = st.tabs(["🔐 تسجيل الدخول", "✨ إنشاء حساب جديد"])
+def send_image_base64(instance, to, base64_string, caption):
+    url = f"{EVO_URL}/message/sendMedia/{instance}"
+    headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
     
-    with tab_signup:
-        with st.form("signup_form"):
-            s_merchant_name = st.text_input("اسم التاجر")
-            s_store_name = st.text_input("اسم المحل")
-            s_phone = st.text_input("رقم واتساب التاجر")
-            s_pass = st.text_input("كلمة سر للمتجر", type="password")
-            
-            if st.form_submit_button("إنشاء الحساب"):
-                check = supabase.table('merchants').select("Phone").eq("Phone", s_phone).execute()
-                if check.data:
-                    st.error("❌ هذا الرقم مسجل مسبقاً!")
-                elif s_merchant_name and s_store_name and s_phone and s_pass:
-                    supabase.table('merchants').insert({
-                        "Merchant_name": s_merchant_name, "Store_name": s_store_name, 
-                        "Phone": s_phone, "password": s_pass, "is_active": True
-                    }).execute()
-                    st.success("✅ تم إنشاء الحساب!")
-                else: st.warning("اكمل البيانات")
+    clean_base64 = base64_string.split(",")[1] if "," in base64_string else base64_string
+    
+    payload = {
+        "number": to,
+        "media": clean_base64,
+        "mediatype": "image",
+        "caption": caption,
+        "delay": 500
+    }
+    try:
+        requests.post(url, json=payload, headers=headers)
+    except Exception as e:
+        print(f"Error sending image: {e}")
 
-    with tab_login:
-        with st.form("login_form"):
-            l_phone = st.text_input("رقم واتساب")
-            l_pass = st.text_input("كلمة السر", type="password")
-            if st.form_submit_button("دخول"):
-                res = supabase.table('merchants').select("*").eq("Phone", l_phone).eq("password", l_pass).execute()
-                if res.data:
-                    st.session_state.logged_in = True
-                    st.session_state.merchant_phone = l_phone
-                    st.session_state.store_name = res.data[0].get('Store_name')
-                    st.rerun()
-                else: st.error("بيانات خاطئة")
+# --- معالجة الرسائل القادمة ---
 
-else:
-    st.title(f"🏪 متجر: {st.session_state.store_name}")
-    t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
+@app.route("/webhook", methods=['POST'])
+def whatsapp_reply():
+    data = request.json
+    if not data or data.get('event') not in ['messages.upsert', 'MESSAGES_UPSERT']:
+        return "OK", 200
+    
+    message_data = data.get('data', {})
+    instance_name = data.get('instance') 
+    
+    customer_num = message_data.get('key', {}).get('remoteJid')
+    if not customer_num:
+        return "OK", 200
 
-    with t1:
-        status_db = supabase.table('merchants').select("session_status").eq("Phone", st.session_state.merchant_phone).execute()
-        is_linked = status_db.data and status_db.data[0].get('session_status') == "connected"
+    msg_obj = message_data.get('message', {})
+    incoming_msg = ""
+    if 'conversation' in msg_obj:
+        incoming_msg = msg_obj['conversation']
+    elif 'extendedTextMessage' in msg_obj:
+        incoming_msg = msg_obj['extendedTextMessage'].get('text', '')
+    
+    incoming_msg = incoming_msg.strip().lower()
 
-        if not is_linked:
-            st.warning("⚠️ يجب ربط الواتساب أولاً لتتمكن من إضافة المنتجات.")
+    # --- التعديل الجوهري هنا ---
+    # استخراج رقم الهاتف سواء بدأت الجلسة بـ merchant_ أو v2_
+    merchant_phone = instance_name.replace('merchant_', '').replace('v2_', '')
+
+    merchant_res = supabase.table('merchants').select("*").eq("Phone", merchant_phone).execute()
+    store_info = merchant_res.data[0] if merchant_res.data else {}
+    store_name = store_info.get('Store_name', 'المتجر')
+
+    # 1. الردود الترحيبية الثابتة بالحسانية
+    if any(word in incoming_msg for word in ['سلام', 'السلام']):
+        send_text(instance_name, customer_num, "عليكم وسلام ومرحب بيك.")
+        return "OK", 200
+    
+    if any(word in incoming_msg for word in ['شحالك', 'شحالكم', 'خبارك']):
+        send_text(instance_name, customer_num, "مافين حد حاس بشي الحمدالله.")
+        return "OK", 200
+
+    # 2. الرد على السؤال عن الحساب البنكي
+    if any(word in incoming_msg for word in ['بنكيلي', 'رقم الحساب', 'حسابكم']):
+        send_text(instance_name, customer_num, "لاهي يتواصل معاك صاحب متجر ظرك او تبقي تعدل طلبية بين صيب صاحب متجر ويعدلهالك.")
+        return "OK", 200
+
+    # 3. معالجة طلبات الصور والبحث في المنتجات
+    try:
+        res = supabase.table('products').select("*").eq('Phone', merchant_phone).execute()
+        products_list = res.data if res.data else []
+
+        if any(word in incoming_msg for word in ['صورة', 'مشيلي', 'ريني']):
+            for p in products_list:
+                if p['Product'].lower() in incoming_msg:
+                    if p.get('Image_url'):
+                        send_image_base64(instance_name, customer_num, p['Image_url'], f"تفضل، ذي صورة {p['Product']}")
+                    else:
+                        send_text(instance_name, customer_num, "المعذرة، ذي المنتج ماعندي صورتو ظرك.")
+                    return "OK", 200
+
+        # ردود Gemini الذكية بالحسانية
+        prompt = f"""
+        أنت مساعد مبيعات في متجر "{store_name}". أجب بالحسانية فقط.
+        قائمة المنتجات المتاحة: {products_list}
         
-        with st.form("add_p", clear_on_submit=True):
-            p_name = st.text_input("اسم المنتج")
-            p_price = st.text_input("السعر")
-            p_size = st.text_input("المقاس")
-            p_color = st.text_input("اللون")
-            p_img = st.file_uploader("صورة المنتج", type=['png','jpg'])
-            if st.form_submit_button("حفظ") and is_linked:
-                img_data = f"data:image/png;base64,{base64.b64encode(p_img.read()).decode()}" if p_img else ""
-                supabase.table('products').insert({
-                    "Product": p_name, "Price": p_price, "Size": p_size,
-                    "Color": p_color, "Image_url": img_data, "Phone": st.session_state.merchant_phone
-                }).execute()
-                st.success("تم الحفظ!")
+        القواعد:
+        1. إذا سأل "ذى عندكم" أو "خالك": إذا موجود قل "أهيه خالك" واذكر (السعر، المقاس، اللون).
+        2. إذا سأل "شحال" أو "بكم": أعطه السعر من القائمة.
+        3. إذا قال "دور ذى": رد بـ "دور ظرك ودور من كم ولا تخلص ظرك ول".
+        4. إذا سأل عن اسم المحل: قل "اسم محلنا {store_name}".
+        5. لا تزد أي كلام من عندك، التزم بالمعلومات المتاحة.
+        
+        رسالة الزبون: {incoming_msg}
+        """
 
-    with t3:
-        st.subheader("الطلبات الواردة")
-        ords = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
-        if ords.data: st.table(pd.DataFrame(ords.data)[['customer_phone', 'product_name', 'total_price', 'status']])
+        response = model.generate_content(prompt)
+        send_text(instance_name, customer_num, response.text)
+        
+    except Exception as e:
+        print(f"Error logic: {e}")
+        send_text(instance_name, customer_num, "عدل خطأ، جرب شوي ثانية.")
 
-    with t4:
-        st.subheader("ربط الواتساب")
-        # التعديل: تغيير اسم الجلسة إلى v2 لتجاوز أخطاء الـ state القديمة
-        inst = f"v2_{st.session_state.merchant_phone}"
-        headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
+    return "OK", 200
 
-        if st.button("🔄 توليد رمز QR جديد"):
-            # الخطوة 1: حذف الجلسة القديمة لتنظيف الذاكرة تماماً
-            try: requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers, timeout=5)
-            except: pass
-            time.sleep(1) 
-            
-            # الخطوة 2: إنشاء الجلسة بطلب بسيط جداً
-            create_payload = {
-                "instanceName": inst,
-                "token": "123456",
-                "integration": "WHATSAPP-BAILEYS",
-                "qrcode": True
-            }
-            
-            response = requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
-            
-            if response.status_code in [200, 201]:
-                # الخطوة 3: ضبط الـ Webhook بشكل منفصل
-                webhook_payload = {
-                    "enabled": True,
-                    "url": "http://46.224.250.252:5000/webhook",
-                    "webhook_by_events": False,
-                    "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE"]
-                }
-                requests.post(f"{EVO_URL}/webhook/set/{inst}", json=webhook_payload, headers=headers)
-                
-                st.session_state.qr_time = time.time()
-                st.rerun()
-            else:
-                st.error(f"خطأ في الطلب: {response.text}")
-
-        if 'qr_time' in st.session_state:
-            elapsed = time.time() - st.session_state.qr_time
-            if elapsed > 40:
-                st.error("انتهت الصلاحية! يرجى التوليد مرة أخرى.")
-                del st.session_state.qr_time
-            else:
-                qr_res = requests.get(f"{EVO_URL}/instance/connect/{inst}", headers=headers)
-                if qr_res.status_code == 200:
-                    qr_data = qr_res.json()
-                    qr_base64 = qr_data.get('base64') or qr_data.get('code')
-                    if qr_base64:
-                        img_b64 = qr_base64.split(",")[1] if "," in qr_base64 else qr_base64
-                        st.image(base64.b64decode(img_b64), caption=f"امسح الرمز الآن (المتبقي: {int(40-elapsed)} ثانية)")
-                
-                chk = requests.get(f"{EVO_URL}/instance/connectionState/{inst}", headers=headers)
-                if chk.status_code == 200 and chk.json().get('instance', {}).get('state') == "open":
-                    supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", st.session_state.merchant_phone).execute()
-                    st.success("✅ تم الربط بنجاح!")
-                    del st.session_state.qr_time
-                    st.rerun()
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
