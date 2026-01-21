@@ -30,19 +30,6 @@ except Exception as e:
     st.error(f"❌ خطأ في الاتصال بـ Supabase: {e}")
     st.stop()
 
-# --- وظائف الربط ---
-def set_webhook_automatically(instance_name):
-    url = f"{EVO_URL}/webhook/set/{instance_name}"
-    headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
-    payload = {
-        "enabled": True,
-        "url": "http://46.224.250.252:5000/webhook", 
-        "webhook_by_events": False,
-        "events": ["MESSAGES_UPSERT"]
-    }
-    try: requests.post(url, json=payload, headers=headers, timeout=5)
-    except: pass
-
 # --- واجهة المستخدم ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -118,31 +105,30 @@ else:
         headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
 
         if st.button("🔄 توليد رمز QR جديد"):
-            # التعديل: إضافة token وحذف الجلسة القديمة لضمان عدم حدوث تعارض (reading state)
+            # الخطوة 1: حذف الجلسة القديمة لتنظيف الذاكرة تماماً
+            requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers)
+            time.sleep(1) # وقت قصير لضمان اكتمال الحذف في السيرفر
+            
+            # الخطوة 2: إنشاء الجلسة بطلب بسيط جداً لتجنب خطأ state
             create_payload = {
                 "instanceName": inst,
                 "token": "123456",
                 "integration": "WHATSAPP-BAILEYS",
-                "qrcode": True,
-                "webhook": {
-                    "enabled": True,
-                    "url": "http://46.224.250.252:5000/webhook",
-                    "webhook_by_events": False,
-                    "events": [
-                        "MESSAGES_UPSERT",
-                        "CONNECTION_UPDATE"
-                    ]
-                }
+                "qrcode": True
             }
             
-            # محاولة حذف أي أثر قديم للجلسة قبل الإنشاء
-            try: requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers, timeout=5)
-            except: pass
-            
-            # إرسال طلب الإنشاء الجديد
             response = requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
             
             if response.status_code in [200, 201]:
+                # الخطوة 3: ضبط الـ Webhook بشكل منفصل بعد نجاح الإنشاء
+                webhook_payload = {
+                    "enabled": True,
+                    "url": "http://46.224.250.252:5000/webhook",
+                    "webhook_by_events": False,
+                    "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE"]
+                }
+                requests.post(f"{EVO_URL}/webhook/set/{inst}", json=webhook_payload, headers=headers)
+                
                 st.session_state.qr_time = time.time()
                 st.rerun()
             else:
