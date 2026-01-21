@@ -4,6 +4,7 @@ from supabase import create_client
 import requests
 import google.generativeai as genai
 from dotenv import load_dotenv
+import base64
 
 # --- 1. إعداد البيئة ---
 load_dotenv()
@@ -23,38 +24,55 @@ model = genai.GenerativeModel('gemini-pro')
 EVO_URL = os.getenv("EVO_URL", "http://127.0.0.1:8080")
 EVO_API_KEY = os.getenv("EVO_API_KEY", "123456")
 
-# --- دالات الإرسال (نص وصور بوضوح كامل) ---
+# --- دالات الإرسال المعدلة ---
 
 def send_text(instance, to, body):
     url = f"{EVO_URL}/message/sendText/{instance}"
     headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
-    payload = {"number": to, "text": body, "delay": 1000}
-    requests.post(url, json=payload, headers=headers)
+    payload = {"number": to, "text": body, "delay": 500}
+    try:
+        requests.post(url, json=payload, headers=headers)
+    except Exception as e:
+        print(f"Error sending text: {e}")
 
-def send_image(instance, to, image_url, caption):
+def send_image_base64(instance, to, base64_string, caption):
+    """إرسال الصورة المخزنة في قاعدة البيانات كـ Base64"""
     url = f"{EVO_URL}/message/sendMedia/{instance}"
     headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
+    
+    # استخراج البيانات الصافية إذا كان النص يحتوي على header (data:image/png;base64,...)
+    clean_base64 = base64_string.split(",")[1] if "," in base64_string else base64_string
+    
     payload = {
         "number": to,
-        "media": image_url, # رابط الصورة المباشر من Storage
+        "media": clean_base64,
         "mediatype": "image",
-        "caption": caption
+        "caption": caption,
+        "delay": 500
     }
-    requests.post(url, json=payload, headers=headers)
+    try:
+        requests.post(url, json=payload, headers=headers)
+    except Exception as e:
+        print(f"Error sending image: {e}")
 
 # --- معالجة الرسائل القادمة ---
 
 @app.route("/webhook", methods=['POST'])
 def whatsapp_reply():
     data = request.json
-    if not data or data.get('event') != 'messages.upsert':
+    # التحقق من نوع الحدث (Evolution API 2.x يستخدم "messages.upsert")
+    if not data or data.get('event') not in ['messages.upsert', 'MESSAGES_UPSERT']:
         return "OK", 200
     
     message_data = data.get('data', {})
     instance_name = data.get('instance') 
-    customer_num = message_data.get('key', {}).get('remoteJid')
     
-    # استخراج النص من واتساب
+    # الحصول على رقم المرسل
+    customer_num = message_data.get('key', {}).get('remoteJid')
+    if not customer_num:
+        return "OK", 200
+
+    # استخراج النص من الرسالة
     msg_obj = message_data.get('message', {})
     incoming_msg = ""
     if 'conversation' in msg_obj:
@@ -63,9 +81,10 @@ def whatsapp_reply():
         incoming_msg = msg_obj['extendedTextMessage'].get('text', '')
     
     incoming_msg = incoming_msg.strip().lower()
+    # الحصول على هاتف التاجر من اسم الجلسة
     merchant_phone = instance_name.replace('merchant_', '')
 
-    # جلب معلومات المحل من قاعدة البيانات
+    # جلب معلومات المحل
     merchant_res = supabase.table('merchants').select("*").eq("Phone", merchant_phone).execute()
     store_info = merchant_res.data[0] if merchant_res.data else {}
     store_name = store_info.get('Store_name', 'المتجر')
@@ -92,10 +111,10 @@ def whatsapp_reply():
         # إذا طلب صورة لمنتج معين
         if any(word in incoming_msg for word in ['صورة', 'مشيلي', 'ريني']):
             for p in products_list:
+                # التحقق من وجود اسم المنتج في رسالة الزبون
                 if p['Product'].lower() in incoming_msg:
-                    send_text(instance_name, customer_num, "أوكي ظرك")
-                    if p.get('Image'):
-                        send_image(instance_name, customer_num, p['Image'], f"تفضل، ذي صورة {p['Product']}")
+                    if p.get('Image_url'): # تأكدنا من استخدام العمود الجديد Image_url
+                        send_image_base64(instance_name, customer_num, p['Image_url'], f"تفضل، ذي صورة {p['Product']}")
                     else:
                         send_text(instance_name, customer_num, "المعذرة، ذي المنتج ماعندي صورتو ظرك.")
                     return "OK", 200
@@ -103,7 +122,7 @@ def whatsapp_reply():
         # ردود Gemini الذكية بالحسانية
         prompt = f"""
         أنت مساعد مبيعات في متجر "{store_name}". أجب بالحسانية فقط.
-        قائمة المنتجات: {products_list}
+        قائمة المنتجات المتاحة: {products_list}
         
         القواعد:
         1. إذا سأل "ذى عندكم" أو "خالك": إذا موجود قل "أهيه خالك" واذكر (السعر، المقاس، اللون).
@@ -119,7 +138,7 @@ def whatsapp_reply():
         send_text(instance_name, customer_num, response.text)
         
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error logic: {e}")
         send_text(instance_name, customer_num, "عدل خطأ، جرب شوي ثانية.")
 
     return "OK", 200
