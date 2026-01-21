@@ -13,7 +13,7 @@ import io
 st.set_page_config(page_title="لوحة تحكم المتجر المتطورة", layout="wide")
 
 # 2. تحميل الإعدادات من ملف .env الموجود على السيرفر
-load_dotenv() # يقرأ الملف الذي أنشأتِه بـ Printf
+load_dotenv() 
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -58,7 +58,6 @@ if not st.session_state.logged_in:
             s_pass = st.text_input("كلمة سر للمتجر", type="password")
             
             if st.form_submit_button("إنشاء الحساب"):
-                # شرطك: التأكد من أن الرقم غير مسجل مسبقاً
                 check = supabase.table('merchants').select("Phone").eq("Phone", s_phone).execute()
                 if check.data:
                     st.error("❌ هذا الرقم مسجل مسبقاً!")
@@ -88,7 +87,6 @@ else:
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
     with t1:
-        # شرطك: التأكد من نجاح الربط قبل السماح بالإضافة
         status_db = supabase.table('merchants').select("session_status").eq("Phone", st.session_state.merchant_phone).execute()
         is_linked = status_db.data and status_db.data[0].get('session_status') == "connected"
 
@@ -120,21 +118,33 @@ else:
         headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
 
         if st.button("🔄 توليد QR (صالح لـ 30 ثانية)"):
-            # تصحيح الخطأ: إضافة integration
-            requests.post(f"{EVO_URL}/instance/create", json={"instanceName": inst, "integration": "WHATSAPP-BAILEYS"}, headers=headers)
-            set_webhook_automatically(inst)
+            # تعديل: إضافة كافة الخصائص المطلوبة في طلب الإنشاء لضمان استجابة السيرفر
+            create_payload = {
+                "instanceName": inst,
+                "token": "",
+                "integration": "WHATSAPP-BAILEYS",
+                "qrcode": True,
+                "webhook": "http://46.224.250.252:5000/webhook",
+                "events": ["MESSAGES_UPSERT"]
+            }
+            requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
             st.session_state.qr_time = time.time()
             st.rerun()
 
         if 'qr_time' in st.session_state:
-            if time.time() - st.session_state.qr_time > 30:
-                st.error("انتهت الصلاحية!")
+            elapsed = time.time() - st.session_state.qr_time
+            if elapsed > 30:
+                st.error("انتهت الصلاحية! يرجى التوليد مرة أخرى.")
                 del st.session_state.qr_time
             else:
+                # محاولة جلب الـ QR
                 qr_res = requests.get(f"{EVO_URL}/instance/connect/{inst}", headers=headers)
-                if qr_res.status_code == 200 and qr_res.json().get('base64'):
-                    img_b64 = qr_res.json().get('base64').split(",")[1]
-                    st.image(base64.b64decode(img_b64), caption="امسح الآن")
+                if qr_res.status_code == 200:
+                    qr_data = qr_res.json()
+                    qr_base64 = qr_data.get('base64') or qr_data.get('code')
+                    if qr_base64:
+                        img_b64 = qr_base64.split(",")[1] if "," in qr_base64 else qr_base64
+                        st.image(base64.b64decode(img_b64), caption=f"امسح الرمز الآن (المتبقي: {int(30-elapsed)} ثانية)")
                 
                 # فحص النجاح الفعلي قبل الحفظ في DB
                 chk = requests.get(f"{EVO_URL}/instance/connectionState/{inst}", headers=headers)
