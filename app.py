@@ -117,19 +117,22 @@ else:
         inst = f"merchant_{st.session_state.merchant_phone}"
         headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
 
-        # التعديل الجديد والنهائي لتفادي خطأ length و undefined
         if st.button("🔄 توليد رمز QR جديد"):
+            # التعديل: إرسال الـ webhook كـ Object لتفادي خطأ الـ length
             create_payload = {
                 "instanceName": inst,
                 "token": "",
                 "integration": "WHATSAPP-BAILEYS",
                 "qrcode": True,
-                "webhook": "http://46.224.250.252:5000/webhook",
-                "webhook_by_events": False,
-                "events": [
-                    "MESSAGES_UPSERT",
-                    "CONNECTION_UPDATE"
-                ]
+                "webhook": {
+                    "enabled": True,
+                    "url": "http://46.224.250.252:5000/webhook",
+                    "webhook_by_events": False,
+                    "events": [
+                        "MESSAGES_UPSERT",
+                        "CONNECTION_UPDATE"
+                    ]
+                }
             }
             
             # التأكد من مسح أي أثر قديم قبل الإنشاء الجديد
@@ -142,7 +145,7 @@ else:
                 st.session_state.qr_time = time.time()
                 st.rerun()
             else:
-                st.error(f"فشل السيرفر في الاستجابة: {response.text}")
+                st.error(f"خطأ في الطلب: {response.text}")
 
         if 'qr_time' in st.session_state:
             elapsed = time.time() - st.session_state.qr_time
