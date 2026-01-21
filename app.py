@@ -118,10 +118,10 @@ else:
         headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
 
         if st.button("🔄 توليد رمز QR جديد"):
-            # التعديل: إرسال الـ webhook كـ Object لتفادي خطأ الـ length
+            # التعديل: إضافة token وحذف الجلسة القديمة لضمان عدم حدوث تعارض (reading state)
             create_payload = {
                 "instanceName": inst,
-                "token": "",
+                "token": "123456",
                 "integration": "WHATSAPP-BAILEYS",
                 "qrcode": True,
                 "webhook": {
@@ -135,10 +135,11 @@ else:
                 }
             }
             
-            # التأكد من مسح أي أثر قديم قبل الإنشاء الجديد
-            requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers)
+            # محاولة حذف أي أثر قديم للجلسة قبل الإنشاء
+            try: requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers, timeout=5)
+            except: pass
             
-            # إرسال طلب الإنشاء
+            # إرسال طلب الإنشاء الجديد
             response = requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
             
             if response.status_code in [200, 201]:
