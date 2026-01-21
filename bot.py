@@ -24,7 +24,7 @@ model = genai.GenerativeModel('gemini-pro')
 EVO_URL = os.getenv("EVO_URL", "http://127.0.0.1:8080")
 EVO_API_KEY = os.getenv("EVO_API_KEY", "123456")
 
-# --- دالات الإرسال المعدلة ---
+# --- دالات الإرسال ---
 
 def send_text(instance, to, body):
     url = f"{EVO_URL}/message/sendText/{instance}"
@@ -36,11 +36,9 @@ def send_text(instance, to, body):
         print(f"Error sending text: {e}")
 
 def send_image_base64(instance, to, base64_string, caption):
-    """إرسال الصورة المخزنة في قاعدة البيانات كـ Base64"""
     url = f"{EVO_URL}/message/sendMedia/{instance}"
     headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
     
-    # استخراج البيانات الصافية إذا كان النص يحتوي على header (data:image/png;base64,...)
     clean_base64 = base64_string.split(",")[1] if "," in base64_string else base64_string
     
     payload = {
@@ -60,19 +58,16 @@ def send_image_base64(instance, to, base64_string, caption):
 @app.route("/webhook", methods=['POST'])
 def whatsapp_reply():
     data = request.json
-    # التحقق من نوع الحدث (Evolution API 2.x يستخدم "messages.upsert")
     if not data or data.get('event') not in ['messages.upsert', 'MESSAGES_UPSERT']:
         return "OK", 200
     
     message_data = data.get('data', {})
     instance_name = data.get('instance') 
     
-    # الحصول على رقم المرسل
     customer_num = message_data.get('key', {}).get('remoteJid')
     if not customer_num:
         return "OK", 200
 
-    # استخراج النص من الرسالة
     msg_obj = message_data.get('message', {})
     incoming_msg = ""
     if 'conversation' in msg_obj:
@@ -81,10 +76,11 @@ def whatsapp_reply():
         incoming_msg = msg_obj['extendedTextMessage'].get('text', '')
     
     incoming_msg = incoming_msg.strip().lower()
-    # الحصول على هاتف التاجر من اسم الجلسة
-    merchant_phone = instance_name.replace('merchant_', '')
 
-    # جلب معلومات المحل
+    # --- التعديل الجوهري هنا ---
+    # استخراج رقم الهاتف سواء بدأت الجلسة بـ merchant_ أو v2_
+    merchant_phone = instance_name.replace('merchant_', '').replace('v2_', '')
+
     merchant_res = supabase.table('merchants').select("*").eq("Phone", merchant_phone).execute()
     store_info = merchant_res.data[0] if merchant_res.data else {}
     store_name = store_info.get('Store_name', 'المتجر')
@@ -108,12 +104,10 @@ def whatsapp_reply():
         res = supabase.table('products').select("*").eq('Phone', merchant_phone).execute()
         products_list = res.data if res.data else []
 
-        # إذا طلب صورة لمنتج معين
         if any(word in incoming_msg for word in ['صورة', 'مشيلي', 'ريني']):
             for p in products_list:
-                # التحقق من وجود اسم المنتج في رسالة الزبون
                 if p['Product'].lower() in incoming_msg:
-                    if p.get('Image_url'): # تأكدنا من استخدام العمود الجديد Image_url
+                    if p.get('Image_url'):
                         send_image_base64(instance_name, customer_num, p['Image_url'], f"تفضل، ذي صورة {p['Product']}")
                     else:
                         send_text(instance_name, customer_num, "المعذرة، ذي المنتج ماعندي صورتو ظرك.")
