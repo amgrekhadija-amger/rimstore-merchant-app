@@ -117,19 +117,32 @@ else:
         inst = f"merchant_{st.session_state.merchant_phone}"
         headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
 
-        if st.button("🔄 توليد QR (صالح لـ 30 ثانية)"):
-            # تعديل: إضافة كافة الخصائص المطلوبة في طلب الإنشاء لضمان استجابة السيرفر
+        # التعديل الجديد والنهائي لتفادي خطأ length و undefined
+        if st.button("🔄 توليد رمز QR جديد"):
             create_payload = {
                 "instanceName": inst,
                 "token": "",
                 "integration": "WHATSAPP-BAILEYS",
                 "qrcode": True,
                 "webhook": "http://46.224.250.252:5000/webhook",
-                "events": ["MESSAGES_UPSERT"]
+                "webhook_by_events": False,
+                "events": [
+                    "MESSAGES_UPSERT",
+                    "CONNECTION_UPDATE"
+                ]
             }
-            requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
-            st.session_state.qr_time = time.time()
-            st.rerun()
+            
+            # التأكد من مسح أي أثر قديم قبل الإنشاء الجديد
+            requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers)
+            
+            # إرسال طلب الإنشاء
+            response = requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
+            
+            if response.status_code in [200, 201]:
+                st.session_state.qr_time = time.time()
+                st.rerun()
+            else:
+                st.error(f"فشل السيرفر في الاستجابة: {response.text}")
 
         if 'qr_time' in st.session_state:
             elapsed = time.time() - st.session_state.qr_time
