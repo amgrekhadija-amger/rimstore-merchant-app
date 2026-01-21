@@ -101,15 +101,17 @@ else:
 
     with t4:
         st.subheader("ربط الواتساب")
-        inst = f"merchant_{st.session_state.merchant_phone}"
+        # التعديل: تغيير اسم الجلسة إلى v2 لتجاوز أخطاء الـ state القديمة
+        inst = f"v2_{st.session_state.merchant_phone}"
         headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
 
         if st.button("🔄 توليد رمز QR جديد"):
             # الخطوة 1: حذف الجلسة القديمة لتنظيف الذاكرة تماماً
-            requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers)
-            time.sleep(1) # وقت قصير لضمان اكتمال الحذف في السيرفر
+            try: requests.delete(f"{EVO_URL}/instance/delete/{inst}", headers=headers, timeout=5)
+            except: pass
+            time.sleep(1) 
             
-            # الخطوة 2: إنشاء الجلسة بطلب بسيط جداً لتجنب خطأ state
+            # الخطوة 2: إنشاء الجلسة بطلب بسيط جداً
             create_payload = {
                 "instanceName": inst,
                 "token": "123456",
@@ -120,7 +122,7 @@ else:
             response = requests.post(f"{EVO_URL}/instance/create", json=create_payload, headers=headers)
             
             if response.status_code in [200, 201]:
-                # الخطوة 3: ضبط الـ Webhook بشكل منفصل بعد نجاح الإنشاء
+                # الخطوة 3: ضبط الـ Webhook بشكل منفصل
                 webhook_payload = {
                     "enabled": True,
                     "url": "http://46.224.250.252:5000/webhook",
@@ -136,23 +138,21 @@ else:
 
         if 'qr_time' in st.session_state:
             elapsed = time.time() - st.session_state.qr_time
-            if elapsed > 30:
+            if elapsed > 40:
                 st.error("انتهت الصلاحية! يرجى التوليد مرة أخرى.")
                 del st.session_state.qr_time
             else:
-                # محاولة جلب الـ QR
                 qr_res = requests.get(f"{EVO_URL}/instance/connect/{inst}", headers=headers)
                 if qr_res.status_code == 200:
                     qr_data = qr_res.json()
                     qr_base64 = qr_data.get('base64') or qr_data.get('code')
                     if qr_base64:
                         img_b64 = qr_base64.split(",")[1] if "," in qr_base64 else qr_base64
-                        st.image(base64.b64decode(img_b64), caption=f"امسح الرمز الآن (المتبقي: {int(30-elapsed)} ثانية)")
+                        st.image(base64.b64decode(img_b64), caption=f"امسح الرمز الآن (المتبقي: {int(40-elapsed)} ثانية)")
                 
-                # فحص النجاح الفعلي قبل الحفظ في DB
                 chk = requests.get(f"{EVO_URL}/instance/connectionState/{inst}", headers=headers)
                 if chk.status_code == 200 and chk.json().get('instance', {}).get('state') == "open":
-                    supabase.table('merchants').update({"session_status": "connected", "qr_code": "OK"}).eq("Phone", st.session_state.merchant_phone).execute()
+                    supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", st.session_state.merchant_phone).execute()
                     st.success("✅ تم الربط بنجاح!")
                     del st.session_state.qr_time
                     st.rerun()
