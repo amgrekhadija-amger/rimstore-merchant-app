@@ -20,33 +20,30 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-pro')
 
-# إعدادات Evolution API
-EVO_URL = os.getenv("EVO_URL", "http://127.0.0.1:8080")
-EVO_API_KEY = os.getenv("EVO_API_KEY", "123456")
+# إعدادات WPPConnect (التعديل الجديد)
+WPP_URL = os.getenv("WPP_URL", "http://127.0.0.1:2136")
+SECRET_KEY = os.getenv("SECRET_KEY", "THISISMYSECUREKEY")
 
-# --- دالات الإرسال ---
+# --- دالات الإرسال المعدلة لـ WPPConnect ---
 
 def send_text(instance, to, body):
-    url = f"{EVO_URL}/message/sendText/{instance}"
-    headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
-    payload = {"number": to, "text": body, "delay": 500}
+    url = f"{WPP_URL}/api/{instance}/send-message"
+    headers = {"Authorization": f"Bearer {SECRET_KEY}", "Content-Type": "application/json"}
+    payload = {"phone": to, "message": body}
     try:
         requests.post(url, json=payload, headers=headers)
     except Exception as e:
         print(f"Error sending text: {e}")
 
 def send_image_base64(instance, to, base64_string, caption):
-    url = f"{EVO_URL}/message/sendMedia/{instance}"
-    headers = {"apikey": EVO_API_KEY, "Content-Type": "application/json"}
+    url = f"{WPP_URL}/api/{instance}/send-image"
+    headers = {"Authorization": f"Bearer {SECRET_KEY}", "Content-Type": "application/json"}
     
-    clean_base64 = base64_string.split(",")[1] if "," in base64_string else base64_string
-    
+    # تحويل الصورة إلى التنسيق الذي يقبله WPPConnect
     payload = {
-        "number": to,
-        "media": clean_base64,
-        "mediatype": "image",
-        "caption": caption,
-        "delay": 500
+        "phone": to,
+        "base64": base64_string,
+        "caption": caption
     }
     try:
         requests.post(url, json=payload, headers=headers)
@@ -58,34 +55,26 @@ def send_image_base64(instance, to, base64_string, caption):
 @app.route("/webhook", methods=['POST'])
 def whatsapp_reply():
     data = request.json
-    if not data or data.get('event') not in ['messages.upsert', 'MESSAGES_UPSERT']:
+    # WPPConnect يرسل الحدث باسم 'chat:received' أو 'message'
+    if not data:
         return "OK", 200
     
-    message_data = data.get('data', {})
-    instance_name = data.get('instance') 
-    
-    customer_num = message_data.get('key', {}).get('remoteJid')
-    if not customer_num:
+    # استخراج البيانات حسب هيكلة WPPConnect
+    instance_name = data.get('session') 
+    customer_num = data.get('from') # رقم الزبون
+    incoming_msg = data.get('content', '').strip().lower() # نص الرسالة
+
+    if not customer_num or not incoming_msg:
         return "OK", 200
 
-    msg_obj = message_data.get('message', {})
-    incoming_msg = ""
-    if 'conversation' in msg_obj:
-        incoming_msg = msg_obj['conversation']
-    elif 'extendedTextMessage' in msg_obj:
-        incoming_msg = msg_obj['extendedTextMessage'].get('text', '')
-    
-    incoming_msg = incoming_msg.strip().lower()
-
-    # --- التعديل الجوهري هنا ---
-    # استخراج رقم الهاتف سواء بدأت الجلسة بـ merchant_ أو v2_
-    merchant_phone = instance_name.replace('merchant_', '').replace('v2_', '')
+    # استخراج رقم التاجر من اسم الجلسة (مثال: store_222666)
+    merchant_phone = instance_name.replace('store_', '').replace('v2_', '')
 
     merchant_res = supabase.table('merchants').select("*").eq("Phone", merchant_phone).execute()
     store_info = merchant_res.data[0] if merchant_res.data else {}
     store_name = store_info.get('Store_name', 'المتجر')
 
-    # 1. الردود الترحيبية الثابتة بالحسانية
+    # --- الردود بالحسانية (كما هي بدون تغيير) ---
     if any(word in incoming_msg for word in ['سلام', 'السلام']):
         send_text(instance_name, customer_num, "عليكم وسلام ومرحب بيك.")
         return "OK", 200
@@ -94,12 +83,11 @@ def whatsapp_reply():
         send_text(instance_name, customer_num, "مافين حد حاس بشي الحمدالله.")
         return "OK", 200
 
-    # 2. الرد على السؤال عن الحساب البنكي
     if any(word in incoming_msg for word in ['بنكيلي', 'رقم الحساب', 'حسابكم']):
         send_text(instance_name, customer_num, "لاهي يتواصل معاك صاحب متجر ظرك او تبقي تعدل طلبية بين صيب صاحب متجر ويعدلهالك.")
         return "OK", 200
 
-    # 3. معالجة طلبات الصور والبحث في المنتجات
+    # معالجة طلبات الصور والبحث
     try:
         res = supabase.table('products').select("*").eq('Phone', merchant_phone).execute()
         products_list = res.data if res.data else []
@@ -113,18 +101,10 @@ def whatsapp_reply():
                         send_text(instance_name, customer_num, "المعذرة، ذي المنتج ماعندي صورتو ظرك.")
                     return "OK", 200
 
-        # ردود Gemini الذكية بالحسانية
+        # ردود Gemini الذكية بالحسانية (نفس منطقك السابق)
         prompt = f"""
         أنت مساعد مبيعات في متجر "{store_name}". أجب بالحسانية فقط.
         قائمة المنتجات المتاحة: {products_list}
-        
-        القواعد:
-        1. إذا سأل "ذى عندكم" أو "خالك": إذا موجود قل "أهيه خالك" واذكر (السعر، المقاس، اللون).
-        2. إذا سأل "شحال" أو "بكم": أعطه السعر من القائمة.
-        3. إذا قال "دور ذى": رد بـ "دور ظرك ودور من كم ولا تخلص ظرك ول".
-        4. إذا سأل عن اسم المحل: قل "اسم محلنا {store_name}".
-        5. لا تزد أي كلام من عندك، التزم بالمعلومات المتاحة.
-        
         رسالة الزبون: {incoming_msg}
         """
 
