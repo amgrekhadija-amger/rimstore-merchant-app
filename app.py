@@ -3,31 +3,62 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client
 import requests
-import time
 import base64
 
-# 1. إعداد الصفحة
+# --- الإعدادات الثابتة ---
+PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
+WEBHOOK_URL = "https://rimstorebot.pythonanywhere.com/whatsapp" 
+
 st.set_page_config(page_title="لوحة تحكم المتجر المتطورة - WPP", layout="wide")
 
-# 2. تحميل الإعدادات
 load_dotenv() 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# الربط مع سيرفر Node.js (المنفذ الجديد)
-GATEWAY_URL = "http://127.0.0.1:3000"
-
-# 3. الاتصال بقاعدة البيانات
 try:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("⚠️ ملف .env ناقص")
-        st.stop()
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    st.error(f"❌ خطأ: {e}")
+    st.error(f"❌ خطأ في الاتصال: {e}")
     st.stop()
 
-# --- نظام الجلسة ---
+# --- دالة إنشاء Instance ---
+def create_merchant_instance(phone):
+    url = f"https://api.green-api.com/partner/waInstance/create/{PARTNER_KEY}"
+    try:
+        res = requests.post(url)
+        if res.status_code == 200:
+            data = res.json()
+            m_id = str(data.get('idInstance'))
+            m_token = data.get('apiTokenInstance')
+            
+            # تحديث أعمدة التاجر في Supabase
+            supabase.table('merchants').update({
+                "instance_id": m_id, 
+                "api_token": m_token
+            }).eq("Phone", phone).execute()
+            
+            set_webhook_url(m_id, m_token)
+            return m_id, m_token
+    except: return None, None
+
+def set_webhook_url(m_id, m_token):
+    url = f"https://api.green-api.com/waInstance{m_id}/setSettings/{m_token}"
+    payload = {
+        "webhookUrl": WEBHOOK_URL, 
+        "outgoingAPIMessage": "yes", 
+        "incomingMsg": "yes",
+        "deviceStatus": "yes"
+    }
+    requests.post(url, json=payload)
+
+def get_green_qr(id_instance, api_token):
+    url = f"https://api.green-api.com/waInstance{id_instance}/qr/{api_token}"
+    try:
+        res = requests.get(url)
+        if res.status_code == 200: return res.json()
+    except: return None
+
+# --- واجهة تسجيل الدخول ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
@@ -40,7 +71,6 @@ if not st.session_state.logged_in:
             s_store_name = st.text_input("اسم المحل")
             s_phone = st.text_input("رقم واتساب التاجر")
             s_pass = st.text_input("كلمة سر للمتجر", type="password")
-            
             if st.form_submit_button("إنشاء الحساب"):
                 check = supabase.table('merchants').select("Phone").eq("Phone", s_phone).execute()
                 if check.data: st.error("❌ الرقم مسجل مسبقاً!")
@@ -50,7 +80,6 @@ if not st.session_state.logged_in:
                         "Phone": s_phone, "password": s_pass, "session_status": "disconnected"
                     }).execute()
                     st.success("✅ تم إنشاء الحساب!")
-                else: st.warning("أكمل البيانات")
 
     with tab_login:
         with st.form("login_form"):
@@ -62,6 +91,8 @@ if not st.session_state.logged_in:
                     st.session_state.logged_in = True
                     st.session_state.merchant_phone = l_phone
                     st.session_state.store_name = res.data[0].get('Store_name')
+                    st.session_state.m_id = res.data[0].get('instance_id')
+                    st.session_state.m_token = res.data[0].get('api_token')
                     st.rerun()
                 else: st.error("بيانات خاطئة")
 
@@ -69,13 +100,9 @@ else:
     st.title(f"🏪 متجر: {st.session_state.store_name}")
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
-    # --- تبويب إضافة المنتج (نفس تصميمك) ---
     with t1:
-        status_db = supabase.table('merchants').select("session_status").eq("Phone", st.session_state.merchant_phone).execute()
-        is_linked = status_db.data and status_db.data[0].get('session_status') == "connected"
-
-        if not is_linked:
-            st.warning("⚠️ يجب ربط الواتساب أولاً.")
+        res_status = supabase.table('merchants').select("session_status").eq("Phone", st.session_state.merchant_phone).execute()
+        is_linked = res_status.data and res_status.data[0].get('session_status') == "connected"
         
         with st.form("add_p", clear_on_submit=True):
             p_name = st.text_input("اسم المنتج")
@@ -83,38 +110,40 @@ else:
             p_size = st.text_input("المقاس")
             p_color = st.text_input("اللون")
             p_img = st.file_uploader("صورة المنتج", type=['png','jpg'])
-            if st.form_submit_button("حفظ") and is_linked:
+            if st.form_submit_button("حفظ"):
                 img_data = f"data:image/png;base64,{base64.b64encode(p_img.read()).decode()}" if p_img else ""
                 supabase.table('products').insert({
-                    "Product": p_name, "Price": p_price, "Size": p_size,
+                    "Product": p_name, "Price": p_price, "Size": p_size, 
                     "Color": p_color, "Image_url": img_data, "Phone": st.session_state.merchant_phone
                 }).execute()
-                st.success("تم الحفظ!")
+                st.success("تم الحفظ بنجاح!")
 
-    # --- تبويب ربط الواتساب (التعديل التقني فقط) ---
     with t4:
-        st.subheader("إعدادات الاتصال")
-        if st.button("🔄 توليد رمز QR الجديد"):
-            with st.spinner("جاري الاتصال..."):
-                try:
-                    requests.post(f"{GATEWAY_URL}/init-session", json={"phone": st.session_state.merchant_phone})
-                    st.session_state.show_qr = True
-                    time.sleep(2)
-                    st.rerun()
-                except: st.error("تأكد من تشغيل ملف server.js أولاً")
+        st.subheader("إعدادات الاتصال عبر Green-API")
+        if not st.session_state.m_id:
+            if st.button("🚀 تفعيل خدمة الواتساب للمحل"):
+                with st.spinner("جاري تهيئة النظام..."):
+                    m_id, m_token = create_merchant_instance(st.session_state.merchant_phone)
+                    if m_id:
+                        st.session_state.m_id = m_id
+                        st.session_state.m_token = m_token
+                        st.success("✅ تم تفعيل الخدمة!")
+                        st.rerun()
+        else:
+            if st.button("🔄 توليد رمز QR الجديد"):
+                with st.spinner("جاري الاتصال..."):
+                    qr_data = get_green_qr(st.session_state.m_id, st.session_state.m_token)
+                    if qr_data and qr_data.get('type') == 'qrCode':
+                        st.session_state.qr_img = qr_data.get('message')
+                        st.rerun()
 
-        if st.session_state.get('show_qr'):
-            try:
-                res = requests.get(f"{GATEWAY_URL}/get-qr/{st.session_state.merchant_phone}")
-                if res.status_code == 200:
-                    st.image(res.json()['qr'], caption="امسح الرمز بواتساب التاجر")
-                else: st.info("الرمز قيد التجهيز...")
-            except: st.error("فشل جلب الرمز")
-            
-            if st.button("🔄 تحديث حالة الربط"):
-                check = supabase.table('merchants').select("session_status").eq("Phone", st.session_state.merchant_phone).execute()
-                if check.data and check.data[0]['session_status'] == "connected":
-                    st.success("✅ متصل!")
-                    st.session_state.show_qr = False
-                    st.rerun()
-                else: st.info("لم يتم المسح بعد.")
+            if 'qr_img' in st.session_state:
+                st.image(base64.b64decode(st.session_state.qr_img), width=300)
+                if st.button("✅ تحديث حالة الربط"):
+                    check_url = f"https://api.green-api.com/waInstance{st.session_state.m_id}/getStateInstance/{st.session_state.m_token}"
+                    state = requests.get(check_url).json().get('stateInstance')
+                    if state == 'authorized':
+                        supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", st.session_state.merchant_phone).execute()
+                        st.success("✅ متصل بنجاح!")
+                        del st.session_state.qr_img
+                        st.rerun()
