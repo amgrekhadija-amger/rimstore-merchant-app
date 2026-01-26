@@ -25,10 +25,9 @@ except Exception as e:
     st.error(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
     st.stop()
 
-# --- دالة إنشاء Instance (مصححة لمنع TypeError) ---
+# --- دالة إنشاء Instance ---
 def create_merchant_instance(phone):
-    if not phone:
-        return None, None
+    if not phone: return None, None
     url = f"https://api.green-api.com/partner/waInstance/create/{PARTNER_KEY}"
     try:
         res = requests.post(url, timeout=10)
@@ -43,15 +42,10 @@ def create_merchant_instance(phone):
                 "api_token": m_token
             }).eq("Phone", phone).execute()
             
-            # ضبط الـ Webhook
             set_webhook_url(m_id, m_token)
             return m_id, m_token
-        else:
-            st.error(f"خطأ من المزود: {res.status_code}")
-            return None, None
-    except Exception as e: 
-        st.error(f"خطأ في الاتصال: {e}")
-        return None, None
+    except: return None, None
+    return None, None
 
 def set_webhook_url(m_id, m_token):
     url = f"https://api.green-api.com/waInstance{m_id}/setSettings/{m_token}"
@@ -65,8 +59,7 @@ def set_webhook_url(m_id, m_token):
     except: pass
 
 def get_green_qr(id_instance, api_token):
-    if not id_instance or not api_token:
-        return None
+    if not id_instance or not api_token: return None
     url = f"https://api.green-api.com/waInstance{id_instance}/qr/{api_token}"
     try:
         res = requests.get(url, timeout=10)
@@ -116,11 +109,14 @@ if not st.session_state.logged_in:
                 except: st.error("تعذر الاتصال بقاعدة البيانات")
 
 else:
-    st.sidebar.title(f"🏪 {st.session_state.store_name}")
+    # العودة للتصميم الأصلي للعنوان والقائمة الجانبية
+    st.title(f"🏪 متجر: {st.session_state.store_name}")
+    
     if st.sidebar.button("🚪 خروج"):
         st.session_state.logged_in = False
         st.rerun()
 
+    # التبويبات بنفس مسمياتها الأصلية
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
     with t1:
@@ -159,27 +155,25 @@ else:
         try:
             orders = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
             if not orders.data: st.info("لا توجد طلبات")
-            for o in orders.data:
-                st.write(f"طلب من {o['customer_phone']}: {o['product_name']} - {o['status']}")
+            else:
+                for o in orders.data:
+                    st.write(f"طلب من {o['customer_phone']}: {o['product_name']} - {o['status']}")
         except: st.error("خطأ في جلب الطلبات")
 
     with t4:
         st.subheader("إعدادات الاتصال عبر Green-API")
         
-        # جلب البيانات من سوبابيس لضمان الدقة
-        m_phone = st.session_state.get('merchant_phone')
-        merchant_check = supabase.table('merchants').select("instance_id", "api_token").eq("Phone", m_phone).execute()
-        
-        m_id = merchant_check.data[0].get('instance_id') if merchant_check.data else None
-        m_token = merchant_check.data[0].get('api_token') if merchant_check.data else None
+        # استرجاع البيانات من قاعدة البيانات لضمان عدم حدوث TypeError
+        merchant_res = supabase.table('merchants').select("instance_id", "api_token").eq("Phone", st.session_state.merchant_phone).execute()
+        m_id = merchant_res.data[0].get('instance_id') if merchant_res.data else None
+        m_token = merchant_res.data[0].get('api_token') if merchant_res.data else None
 
         if not m_id or not m_token:
-            st.info("ℹ️ يجب تفعيل الخدمة لمحلك أولاً.")
             if st.button("🚀 تفعيل خدمة الواتساب للمحل"):
                 with st.spinner("جاري تهيئة النظام..."):
-                    res_id, res_token = create_merchant_instance(m_phone)
-                    if res_id and res_token:
-                        st.success("✅ تم التفعيل! اضغط 'توليد الرمز' الآن.")
+                    new_id, new_token = create_merchant_instance(st.session_state.merchant_phone)
+                    if new_id:
+                        st.success("✅ تم تفعيل الخدمة! يمكنك الآن توليد الرمز.")
                         st.rerun()
         else:
             col_qr, col_status = st.columns(2)
@@ -201,7 +195,7 @@ else:
                         check_url = f"https://api.green-api.com/waInstance{m_id}/getStateInstance/{m_token}"
                         state = requests.get(check_url, timeout=5).json().get('stateInstance')
                         if state == 'authorized':
-                            supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", m_phone).execute()
+                            supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", st.session_state.merchant_phone).execute()
                             st.success("✅ متصل بنجاح!")
                             if 'qr_img' in st.session_state: del st.session_state.qr_img
                             st.rerun()
