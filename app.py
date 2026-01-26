@@ -25,24 +25,31 @@ except Exception as e:
     st.error(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
     st.stop()
 
-# --- دالة إنشاء Instance (محدثة لإظهار تفاصيل الـ 403) ---
+# --- دالة إنشاء Instance تلقائية بالكامل للتاجر ---
 def create_merchant_instance(phone):
     if not phone: return None, None
+    # الرابط المخصص للشركاء لإنشاء Instance
     url = f"https://api.greenapi.com/partner/waInstance/create/{PARTNER_KEY}"
     try:
-        res = requests.post(url, timeout=15)
+        # إرسال طلب POST لإنشاء Instance جديد يخصم من رصيدك
+        res = requests.post(url, timeout=20)
         if res.status_code == 200:
             data = res.json()
             m_id = str(data.get('idInstance'))
             m_token = data.get('apiTokenInstance')
-            supabase.table('merchants').update({"instance_id": m_id, "api_token": m_token}).eq("Phone", phone).execute()
+            # حفظ البيانات تلقائياً في سوبابيس للتاجر
+            supabase.table('merchants').update({
+                "instance_id": m_id, 
+                "api_token": m_token
+            }).eq("Phone", phone).execute()
+            # ضبط الإعدادات آلياً
             set_webhook_url(m_id, m_token)
             return m_id, m_token
         else:
-            st.error(f"❌ خطأ من المزود {res.status_code}: {res.text}")
+            st.error(f"❌ عذراً، فشل النظام في إنشاء الحساب: {res.status_code}")
             return None, None
     except Exception as e:
-        st.error(f"⚠️ خطأ اتصال: {str(e)}")
+        st.error(f"⚠️ خطأ في الاتصال بالمزود: {str(e)}")
         return None, None
 
 def set_webhook_url(m_id, m_token):
@@ -53,15 +60,12 @@ def set_webhook_url(m_id, m_token):
 
 def get_green_qr(id_instance, api_token):
     if not id_instance or not api_token: return None
-    # استخدام الرابط المباشر والأكثر استقراراً
     url = f"https://api.greenapi.com/waInstance{id_instance}/qr/{api_token}"
     try:
         res = requests.get(url, timeout=15)
         if res.status_code == 200:
             return res.json()
-        else:
-            st.error(f"⚠️ فشل جلب الرمز. كود الخطأ: {res.status_code}")
-            return None
+        return None
     except: return None
 
 # --- واجهة تسجيل الدخول (نفس تصميمك) ---
@@ -104,7 +108,6 @@ else:
 
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
-    # (تبويبات t1, t2, t3 تبقى كما هي في كودك الأصلي)
     with t1:
         with st.form("add_p", clear_on_submit=True):
             p_name = st.text_input("اسم المنتج")
@@ -139,49 +142,48 @@ else:
         except: pass
 
     with t4:
-        st.subheader("إعدادات الاتصال عبر Green-API")
+        st.subheader("📲 تفعيل وربط الواتساب")
+        
+        # جلب بيانات التاجر الحالية
         m_res = supabase.table('merchants').select("instance_id", "api_token").eq("Phone", st.session_state.merchant_phone).execute()
         m_id = m_res.data[0].get('instance_id') if m_res.data else None
         m_token = m_res.data[0].get('api_token') if m_res.data else None
 
-        with st.expander("🛠️ إعدادات الربط (يدوي/تلقائي)"):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("الخيار 1: إدخال بياناتك المشتركة")
-                manual_id = st.text_input("ID Instance", value=m_id if m_id else "")
-                manual_token = st.text_input("API Token", value=m_token if m_token else "")
-                if st.button("💾 حفظ البيانات"):
-                    supabase.table('merchants').update({"instance_id": manual_id, "api_token": manual_token}).eq("Phone", st.session_state.merchant_phone).execute()
-                    st.success("تم الحفظ!"); st.rerun()
-            with c2:
-                st.write("الخيار 2: إنشاء تلقائي")
-                if st.button("🚀 طلب تفعيل"):
-                    with st.spinner("جاري المحاولة..."):
-                        new_id, _ = create_merchant_instance(st.session_state.merchant_phone)
-                        if new_id: st.rerun()
-
-        if m_id and m_token:
+        if not m_id:
+            st.info("لم يتم تفعيل الخدمة لهذا المتجر بعد.")
+            if st.button("🚀 تفعيل خدمة الواتساب الآن"):
+                with st.spinner("جاري إنشاء حسابك الجديد..."):
+                    new_id, _ = create_merchant_instance(st.session_state.merchant_phone)
+                    if new_id:
+                        st.success("✅ تم التفعيل بنجاح!")
+                        st.rerun()
+        else:
             col_qr, col_status = st.columns(2)
             with col_qr:
-                if st.button("🔄 توليد رمز QR الجديد"):
+                st.write("### 1. مسح الرمز")
+                if st.button("🔄 توليد رمز QR للربط"):
                     with st.spinner("جاري جلب الرمز..."):
                         qr_data = get_green_qr(m_id, m_token)
                         if qr_data and qr_data.get('type') == 'qrCode':
                             st.session_state.qr_img = qr_data.get('message')
                             st.rerun()
                         elif qr_data and qr_data.get('type') == 'alreadyLoggedIn':
-                            st.success("✅ مربوط بالفعل!")
+                            st.success("✅ الهاتف مربوط بالفعل!")
+                
                 if 'qr_img' in st.session_state:
-                    st.image(base64.b64decode(st.session_state.qr_img), width=300)
+                    st.image(base64.b64decode(st.session_state.qr_img), width=300, caption="افتح واتساب > الأجهزة المرتبطة > ربط جهاز")
             
             with col_status:
-                if st.button("✅ تحديث حالة الربط"):
+                st.write("### 2. حالة الاتصال")
+                if st.button("🔍 تحديث الحالة"):
                     try:
-                        state = requests.get(f"https://api.greenapi.com/waInstance{m_id}/getStateInstance/{m_token}", timeout=5).json().get('stateInstance')
+                        res = requests.get(f"https://api.greenapi.com/waInstance{m_id}/getStateInstance/{m_token}", timeout=5).json()
+                        state = res.get('stateInstance')
                         if state == 'authorized':
                             supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", st.session_state.merchant_phone).execute()
-                            st.success("✅ متصل!"); st.rerun()
-                        else: st.info(f"الحالة: {state}")
-                    except: st.error("فشل الاتصال")
-        else:
-            st.info("أدخل بيانات Instance ID و Token للبدء.")
+                            st.success("✅ متصل الآن بالواتساب!")
+                            if 'qr_img' in st.session_state: del st.session_state.qr_img
+                        else:
+                            st.warning(f"الحالة الحالية: {state}")
+                    except:
+                        st.error("تعذر جلب الحالة حالياً")
