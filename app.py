@@ -109,14 +109,12 @@ if not st.session_state.logged_in:
                 except: st.error("تعذر الاتصال بقاعدة البيانات")
 
 else:
-    # العودة للتصميم الأصلي للعنوان والقائمة الجانبية
     st.title(f"🏪 متجر: {st.session_state.store_name}")
     
     if st.sidebar.button("🚪 خروج"):
         st.session_state.logged_in = False
         st.rerun()
 
-    # التبويبات بنفس مسمياتها الأصلية
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
     with t1:
@@ -163,31 +161,46 @@ else:
     with t4:
         st.subheader("إعدادات الاتصال عبر Green-API")
         
-        # استرجاع البيانات من قاعدة البيانات لضمان عدم حدوث TypeError
+        # استرجاع البيانات الحالية
         merchant_res = supabase.table('merchants').select("instance_id", "api_token").eq("Phone", st.session_state.merchant_phone).execute()
         m_id = merchant_res.data[0].get('instance_id') if merchant_res.data else None
         m_token = merchant_res.data[0].get('api_token') if merchant_res.data else None
 
-        if not m_id or not m_token:
-            if st.button("🚀 تفعيل خدمة الواتساب للمحل"):
-                with st.spinner("جاري تهيئة النظام..."):
-                    new_id, new_token = create_merchant_instance(st.session_state.merchant_phone)
-                    if new_id:
-                        st.success("✅ تم تفعيل الخدمة! يمكنك الآن توليد الرمز.")
-                        st.rerun()
-        else:
+        # --- قسم الربط اليدوي (لحل مشكلة 403 وتجاوز التفعيل التلقائي) ---
+        with st.expander("🛠️ إعدادات الربط (يدوي/تلقائي)"):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("الخيار 1: إدخال بياناتك المشتركة")
+                manual_id = st.text_input("ID Instance الجديد", value=m_id if m_id else "")
+                manual_token = st.text_input("API Token الجديد", value=m_token if m_token else "")
+                if st.button("💾 حفظ البيانات يدوياً"):
+                    supabase.table('merchants').update({"instance_id": manual_id, "api_token": manual_token}).eq("Phone", st.session_state.merchant_phone).execute()
+                    st.success("تم الحفظ! يمكنك الآن توليد الرمز.")
+                    st.rerun()
+            with c2:
+                st.write("الخيار 2: إنشاء حساب جديد")
+                if st.button("🚀 طلب تفعيل تلقائي"):
+                    with st.spinner("جاري المحاولة..."):
+                        new_id, new_token = create_merchant_instance(st.session_state.merchant_phone)
+                        if new_id: st.success("تم التفعيل!"); st.rerun()
+                        else: st.error("فشل التفعيل التلقائي (خطأ 403). يرجى استخدام الخيار اليدوي.")
+
+        # --- قسم توليد الـ QR ---
+        if m_id and m_token:
             col_qr, col_status = st.columns(2)
             with col_qr:
-                if st.button("🔄 توليد رمز QR الجديد"):
-                    with st.spinner("جاري الاتصال..."):
+                if st.button("🔄 توليد رمز QR للربط"):
+                    with st.spinner("جاري جلب الرمز من حسابك..."):
                         qr_data = get_green_qr(m_id, m_token)
                         if qr_data and qr_data.get('type') == 'qrCode':
                             st.session_state.qr_img = qr_data.get('message')
                             st.rerun()
-                        else: st.warning("⚠️ لم يتم جلب الرمز.")
+                        elif qr_data and qr_data.get('type') == 'alreadyLoggedIn':
+                            st.success("✅ الهاتف مربوط بالفعل!")
+                        else: st.warning("⚠️ لا يمكن جلب الرمز. تأكدي من صحة البيانات.")
 
                 if 'qr_img' in st.session_state:
-                    st.image(base64.b64decode(st.session_state.qr_img), width=300)
+                    st.image(base64.b64decode(st.session_state.qr_img), width=300, caption="امسحي الرمز بواتساب الهاتف")
             
             with col_status:
                 if st.button("✅ تحديث حالة الربط"):
@@ -200,4 +213,6 @@ else:
                             if 'qr_img' in st.session_state: del st.session_state.qr_img
                             st.rerun()
                         else: st.info(f"الحالة: {state}")
-                    except: st.error("تعذر الاتصال بـ Green-API")
+                    except: st.error("تعذر الاتصال")
+        else:
+            st.info("يرجى إدخال بيانات Instance ID و Token من حسابك المشترك لبدء الربط.")
