@@ -25,33 +25,51 @@ except Exception as e:
     st.error(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
     st.stop()
 
-# --- 1. دالة إنشاء Instance ---
+# --- 1. دالة إنشاء Instance (المعدلة لتجاوز خطأ 403) ---
 def create_merchant_instance(phone):
     if not phone: return None, None
-    url = f"https://api.greenapi.com/partner/waInstance/create/{PARTNER_KEY}"
-    headers = {"Content-Type": "application/json"}
-    payload = {"plan": "developer"}
+    
+    # الرابط المحدث للشركاء
+    url = "https://api.greenapi.com/partner/waInstance/create"
+    
+    # إضافة المفتاح في الهيدر والجسم لضمان تخطي حماية nginx
+    headers = {
+        "Content-Type": "application/json",
+        "X-Partner-Key": PARTNER_KEY
+    }
+    
+    payload = {
+        "partnerKey": PARTNER_KEY,
+        "plan": "developer"
+    }
     
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=25)
+        
         if res.status_code == 200:
             data = res.json()
             m_id = str(data.get('idInstance'))
             m_token = data.get('apiTokenInstance')
             
-            # تحديث Supabase
-            supabase.table('merchants').update({
-                "instance_id": m_id, 
-                "api_token": m_token
-            }).eq("Phone", phone).execute()
-            
-            set_webhook_url(m_id, m_token)
-            return m_id, m_token
+            if m_id and m_token:
+                # تحديث Supabase
+                supabase.table('merchants').update({
+                    "instance_id": m_id, 
+                    "api_token": m_token
+                }).eq("Phone", phone).execute()
+                
+                set_webhook_url(m_id, m_token)
+                return m_id, m_token
+            else:
+                st.error("⚠️ تم إنشاء المثيل ولكن لم يتم استلام البيانات بشكل صحيح.")
+                return None, None
         else:
+            # عرض تفاصيل الخطأ بدقة لمعرفة السبب إذا استمر الرفض
             st.error(f"❌ خطأ {res.status_code}: {res.text}")
             return None, None
+            
     except Exception as e:
-        st.error(f"⚠️ خطأ فني: {str(e)}")
+        st.error(f"⚠️ خطأ فني في الطلب: {str(e)}")
         return None, None
 
 # --- 2. دالة ضبط الويب هوك ---
@@ -66,7 +84,7 @@ def set_webhook_url(m_id, m_token):
     try: requests.post(url, json=payload, timeout=10)
     except: pass
 
-# --- 3. دالة جلب الرمز QR (محسنة لتشخيص الأخطاء) ---
+# --- 3. دالة جلب الرمز QR ---
 def get_green_qr(id_instance, api_token):
     if not id_instance or not api_token: return None
     url = f"https://api.greenapi.com/waInstance{id_instance}/qr/{api_token}"
@@ -74,7 +92,7 @@ def get_green_qr(id_instance, api_token):
         res = requests.get(url, timeout=20)
         if res.status_code == 200:
             return res.json()
-        elif res.status_code == 466: # الهاتف مربوط بالفعل
+        elif res.status_code == 466:
             return {"type": "alreadyLoggedIn"}
         else:
             st.error(f"🔍 تفاصيل الفشل: كود {res.status_code} - {res.text}")
@@ -129,7 +147,6 @@ else:
 
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
-    # (تبويبات المنتجات والطلبات تظل كما هي)
     with t1:
         with st.form("add_product", clear_on_submit=True):
             p_name = st.text_input("اسم المنتج")
@@ -162,7 +179,6 @@ else:
     with t4:
         st.subheader("📲 تفعيل وربط الواتساب")
         
-        # استدعاء البيانات للتأكد من وجود Instance
         m_res = supabase.table('merchants').select("instance_id", "api_token").eq("Phone", st.session_state.merchant_phone).execute()
         m_id = m_res.data[0].get('instance_id') if m_res.data else None
         m_token = m_res.data[0].get('api_token') if m_res.data else None
@@ -173,8 +189,8 @@ else:
                 with st.spinner("جاري إنشاء الحساب..."):
                     res_id, res_token = create_merchant_instance(st.session_state.merchant_phone)
                     if res_id:
-                        st.success("✅ تم التفعيل! انتظر 5 ثوانٍ ثم اضغط توليد الرمز.")
-                        time.sleep(2)
+                        st.success("✅ تم التفعيل بنجاح!")
+                        time.sleep(1)
                         st.rerun()
         else:
             col_qr, col_status = st.columns(2)
@@ -189,7 +205,7 @@ else:
                             elif qr_data.get('type') == 'alreadyLoggedIn':
                                 st.success("✅ الجهاز مربوط بالفعل!")
                         else:
-                            st.error("⚠️ فشل جلب الرمز. تأكد من رصيد الحساب أو صلاحية المثيل.")
+                            st.error("⚠️ فشل جلب الرمز. تأكد من تفعيل الحساب.")
                 
                 if 'qr_img' in st.session_state:
                     st.image(base64.b64decode(st.session_state.qr_img), width=300)
@@ -209,6 +225,11 @@ else:
                             st.success("✅ متصل!")
                     except: st.error("فشل جلب الحالة")
 
-                if st.button("🗑️ حذف البيانات وإعادة التفعيل"):
-                    supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", st.session_state.merchant_phone).execute()
-                    st.rerun()
+                if st.button("🗑️ إعادة ضبط المثيل"):
+                    if st.checkbox("أؤكد رغبتي في الحذف (سيتم مسح المثيل القديم)"):
+                        supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", st.session_state.merchant_phone).execute()
+                        st.rerun()
+
+
+    
+
