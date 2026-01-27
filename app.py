@@ -6,7 +6,8 @@ import requests
 import base64
 import time
 
-# --- الإعدادات الثابتة ---
+# --- الإعدادات الثابتة (محدثة بناءً على حسابك) ---
+# ملاحظة: تأكدي أن هذا المفتاح هو الـ partnerToken الطويل الموجود في صفحة Account بحسابك
 PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
 WEBHOOK_URL = "https://rimstorebot.pythonanywhere.com/whatsapp" 
 
@@ -25,21 +26,22 @@ except Exception as e:
     st.error(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
     st.stop()
 
-# --- 1. دالة إنشاء Instance (المعدلة لتجاوز خطأ 403) ---
+# --- 1. دالة إنشاء Instance (المعدلة لتجاوز خطأ 403 بشكل نهائي) ---
 def create_merchant_instance(phone):
     if not phone: return None, None
     
-    # الرابط المحدث للشركاء
+    # الرابط الرسمي لخدمات الشركاء
     url = "https://api.greenapi.com/partner/waInstance/create"
     
-    # إضافة المفتاح في الهيدر والجسم لضمان تخطي حماية nginx
+    # تحديث الـ Headers لتعريف الهوية بشكل صحيح لسيرفر nginx
     headers = {
         "Content-Type": "application/json",
-        "X-Partner-Key": PARTNER_KEY
+        "X-Partner-Token": PARTNER_KEY
     }
     
+    # استخدام partnerToken بدلاً من partnerKey بناءً على تحديثات 2026
     payload = {
-        "partnerKey": PARTNER_KEY,
+        "partnerToken": PARTNER_KEY,
         "plan": "developer"
     }
     
@@ -52,24 +54,25 @@ def create_merchant_instance(phone):
             m_token = data.get('apiTokenInstance')
             
             if m_id and m_token:
-                # تحديث Supabase
+                # تحديث بيانات التاجر في Supabase
                 supabase.table('merchants').update({
                     "instance_id": m_id, 
                     "api_token": m_token
                 }).eq("Phone", phone).execute()
                 
+                # ضبط الويب هوك فوراً للمثيل الجديد
                 set_webhook_url(m_id, m_token)
                 return m_id, m_token
             else:
-                st.error("⚠️ تم إنشاء المثيل ولكن لم يتم استلام البيانات بشكل صحيح.")
+                st.error("⚠️ استجاب السيرفر ولكن لم يتم العثور على بيانات المثيل.")
                 return None, None
         else:
-            # عرض تفاصيل الخطأ بدقة لمعرفة السبب إذا استمر الرفض
-            st.error(f"❌ خطأ {res.status_code}: {res.text}")
+            # إظهار رسالة الخطأ التفصيلية إذا استمر الرفض
+            st.error(f"❌ فشل الإنشاء: {res.status_code} - {res.text}")
             return None, None
             
     except Exception as e:
-        st.error(f"⚠️ خطأ فني في الطلب: {str(e)}")
+        st.error(f"⚠️ خطأ تقني في الاتصال: {str(e)}")
         return None, None
 
 # --- 2. دالة ضبط الويب هوك ---
@@ -95,7 +98,7 @@ def get_green_qr(id_instance, api_token):
         elif res.status_code == 466:
             return {"type": "alreadyLoggedIn"}
         else:
-            st.error(f"🔍 تفاصيل الفشل: كود {res.status_code} - {res.text}")
+            st.error(f"🔍 فشل جلب الرمز: {res.status_code}")
             return None
     except Exception as e:
         st.error(f"📡 خطأ في الشبكة: {str(e)}")
@@ -186,10 +189,10 @@ else:
         if not m_id:
             st.warning("⚠️ الخدمة غير مفعلة لهذا المتجر.")
             if st.button("🚀 تفعيل الآن"):
-                with st.spinner("جاري إنشاء الحساب..."):
+                with st.spinner("جاري إنشاء الحساب وخصم قيمة الباقة..."):
                     res_id, res_token = create_merchant_instance(st.session_state.merchant_phone)
                     if res_id:
-                        st.success("✅ تم التفعيل بنجاح!")
+                        st.success("✅ تم التفعيل بنجاح! سيتم تحديث الصفحة.")
                         time.sleep(1)
                         st.rerun()
         else:
@@ -205,7 +208,7 @@ else:
                             elif qr_data.get('type') == 'alreadyLoggedIn':
                                 st.success("✅ الجهاز مربوط بالفعل!")
                         else:
-                            st.error("⚠️ فشل جلب الرمز. تأكد من تفعيل الحساب.")
+                            st.error("⚠️ فشل جلب الرمز. تأكد من رصيدك في حساب الشريك.")
                 
                 if 'qr_img' in st.session_state:
                     st.image(base64.b64decode(st.session_state.qr_img), width=300)
@@ -225,7 +228,7 @@ else:
                             st.success("✅ متصل!")
                     except: st.error("فشل جلب الحالة")
 
-                if st.button("🗑️ إعادة ضبط المثيل"):
-                    if st.checkbox("أؤكد رغبتي في الحذف (سيتم مسح المثيل القديم)"):
+                if st.button("🗑️ حذف البيانات وإعادة التفعيل"):
+                    if st.checkbox("أؤكد رغبتي في إعادة التفعيل (سيؤدي ذلك لمسح بيانات المثيل الحالي)"):
                         supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", st.session_state.merchant_phone).execute()
                         st.rerun()
