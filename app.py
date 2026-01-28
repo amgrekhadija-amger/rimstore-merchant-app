@@ -6,8 +6,7 @@ import requests
 import base64
 import time
 
-# --- الإعدادات الثابتة (محدثة بناءً على حسابك) ---
-# ملاحظة: تأكدي أن هذا المفتاح هو الـ partnerToken الطويل الموجود في صفحة Account بحسابك
+# --- الإعدادات الثابتة ---
 PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
 WEBHOOK_URL = "https://rimstorebot.pythonanywhere.com/whatsapp" 
 
@@ -26,22 +25,19 @@ except Exception as e:
     st.error(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
     st.stop()
 
-# --- 1. دالة إنشاء Instance (المعدلة لتجاوز خطأ 403 بشكل نهائي) ---
+# --- 1. دالة إنشاء Instance (تم تحديث الرابط بناءً على رد الفريق التقني) ---
 def create_merchant_instance(phone):
     if not phone: return None, None
     
-    # الرابط الرسمي لخدمات الشركاء
-    url = "https://api.greenapi.com/partner/waInstance/create"
+    # الرابط الصحيح الذي طلبه الفريق التقني: التوكن يدمج في الرابط
+    url = f"https://api.greenapi.com/partner/createInstance/{PARTNER_KEY}"
     
-    # تحديث الـ Headers لتعريف الهوية بشكل صحيح لسيرفر nginx
     headers = {
-        "Content-Type": "application/json",
-        "X-Partner-Token": PARTNER_KEY
+        "Content-Type": "application/json"
     }
     
-    # استخدام partnerToken بدلاً من partnerKey بناءً على تحديثات 2026
+    # الجسم (Body) يحتوي فقط على الباقة
     payload = {
-        "partnerToken": PARTNER_KEY,
         "plan": "developer"
     }
     
