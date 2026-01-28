@@ -23,7 +23,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 try:
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("⚠️ ملف .env غير موجود أو المفاتيح ناقصة.")
+        st.error("⚠️ ملف .env غير موجود أو المفاتيح ناقصة في السيرفر.")
         st.stop()
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
@@ -67,18 +67,17 @@ def get_green_qr(id_instance, api_token):
     try:
         res = requests.get(url, timeout=20)
         if res.status_code == 200:
-            return res.json() # يعيد {'type': 'qrCode', 'message': '...base64...'}
+            return res.json() 
         elif res.status_code == 466:
             return {"type": "alreadyLoggedIn"}
     except: pass
     return None
 
-# --- واجهة التطبيق (التصميم الأصلي) ---
+# --- واجهة التطبيق ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    # (بقيت شاشات الدخول كما هي دون تغيير لضمان عملها)
     tab_login, tab_signup = st.tabs(["🔐 تسجيل الدخول", "✨ إنشاء حساب جديد"])
     with tab_signup:
         with st.form("signup_form"):
@@ -106,21 +105,39 @@ if not st.session_state.logged_in:
                     st.session_state.merchant_phone = l_phone
                     st.session_state.store_name = res.data[0].get('Store_name')
                     st.rerun()
+                else: st.error("بيانات الدخول غير صحيحة")
 else:
     st.title(f"🏪 لوحة تحكم: {st.session_state.store_name}")
     t1, t2, t3, t4 = st.tabs(["➕ إضافة منتج", "✏️ الإدارة", "🛒 الطلبات", "📲 ربط الواتساب"])
 
-    # (Tabs 1, 2, 3 بقيت كما هي دون تغيير في التصميم)
     with t1:
-        with st.form("add"):
-            # ... كود إضافة المنتج ...
-            pass
+        with st.form("add_product", clear_on_submit=True):
+            p_name = st.text_input("اسم المنتج")
+            p_price = st.text_input("السعر")
+            p_size = st.text_input("المقاس")
+            p_color = st.text_input("اللون")
+            p_img = st.file_uploader("صورة المنتج", type=['png','jpg'])
+            if st.form_submit_button("حفظ المنتج"):
+                try:
+                    img_data = f"data:image/png;base64,{base64.b64encode(p_img.read()).decode()}" if p_img else ""
+                    supabase.table('products').insert({"Product": p_name, "Price": p_price, "Size": p_size, "Color": p_color, "Image_url": img_data, "Phone": st.session_state.merchant_phone}).execute()
+                    st.success("✅ تم حفظ المنتج!")
+                except: st.error("فشل الحفظ")
+
     with t2:
-        # ... كود الإدارة ...
-        pass
+        st.subheader("📦 إدارة المنتجات")
+        prods = supabase.table('products').select("*").eq("Phone", st.session_state.merchant_phone).execute()
+        for p in prods.data:
+            col1, col2 = st.columns([5, 1])
+            col1.write(f"**{p['Product']}** | {p['Price']} MRU")
+            if col2.button("🗑️", key=f"del_{p['id']}"):
+                supabase.table('products').delete().eq("id", p['id']).execute()
+                st.rerun()
+
     with t3:
-        # ... كود الطلبات ...
-        pass
+        st.subheader("🛒 سجل الطلبات")
+        orders = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
+        for o in orders.data: st.info(f"📦 طلب من: {o['customer_phone']} | {o['product_name']}")
 
     with t4:
         st.subheader("📲 تفعيل وربط الواتساب")
@@ -142,16 +159,23 @@ else:
                         qr_data = get_green_qr(m_id, m_token)
                         if qr_data:
                             if qr_data.get('type') == 'qrCode':
-                                # التعديل المهم: فك تشفير الصورة وعرضها فوراً
-                                qr_bytes = base64.b64decode(qr_data.get('message'))
-                                st.image(qr_bytes, caption="امسح الرمز الآن بواتساب الهاتف", width=300)
+                                # حفظ الرمز في الذاكرة لضمان ظهوره
+                                st.session_state.current_qr = qr_data.get('message')
                             elif qr_data.get('type') == 'alreadyLoggedIn':
                                 st.success("✅ الجهاز مربوط بالفعل!")
+                                st.session_state.current_qr = None
                         else:
                             st.error("⚠️ فشل جلب الرمز. تأكد من رصيدك في حساب الشريك.")
+                
+                # عرض الرمز برمجياً بمجرد توفره
+                if 'current_qr' in st.session_state and st.session_state.current_qr:
+                    qr_bytes = base64.b64decode(st.session_state.current_qr)
+                    st.image(qr_bytes, caption="امسح الرمز الآن بواتساب الهاتف", width=300)
             
             with col_status:
                 st.write("### 2️⃣ الحالة")
                 if st.button("🔍 فحص الاتصال"):
-                    res = requests.get(f"https://api.greenapi.com/waInstance{m_id}/getStateInstance/{m_token}").json()
-                    st.metric("الحالة الحالية", res.get('stateInstance'))
+                    try:
+                        res = requests.get(f"https://api.greenapi.com/waInstance{m_id}/getStateInstance/{m_token}").json()
+                        st.metric("الحالة الحالية", res.get('stateInstance'))
+                    except: st.error("فشل فحص الحالة")
