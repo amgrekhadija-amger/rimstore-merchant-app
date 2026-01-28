@@ -224,4 +224,5 @@ else:
                 if st.button("🗑️ إعادة التفعيل"):
                     if st.checkbox("تأكيد مسح البيانات الحالية"):
                         supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", st.session_state.merchant_phone).execute()
-                        st.rerun()
+                        st.rerun()        
+                           
