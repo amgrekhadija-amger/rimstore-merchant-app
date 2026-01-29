@@ -1,4 +1,4 @@
- import streamlit as st
+import streamlit as st
 import os
 from dotenv import load_dotenv
 from supabase import create_client
@@ -183,7 +183,3 @@ else:
                     if st.checkbox("تأكيد المسح"):
                         supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", st.session_state.merchant_phone).execute()
                         st.rerun()
-           
-
-    
-       
