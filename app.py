@@ -1,147 +1,90 @@
 import streamlit as st
-import os
-import requests
-import base64
-import time
-from dotenv import load_dotenv
+import os, requests, time
 from supabase import create_client
 
-# --- 1. الإعدادات الأساسية ---
+# --- إعدادات ثابتة ---
 PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
-WEBHOOK_URL = "https://rimstorebot.pythonanywhere.com/whatsapp" 
 
-st.set_page_config(page_title="لوحة تحكم المتجر المتطورة - WPP", layout="wide")
-
-load_dotenv() 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-try:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("⚠️ يرجى ضبط مفاتيح Supabase في Secrets!")
-        st.stop()
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.error(f"❌ خطأ في الاتصال بقاعدة البيانات: {e}")
-    st.stop()
-
-# --- 2. الدالات (Functions) ---
-
-def create_merchant_instance(phone):
-    """إنشاء Instance جديد وحفظه في قاعدة البيانات"""
-    if not phone: return None, None
+# دالة إنشاء السيرفر (محدثة بالرابط الجديد)
+def create_instance(phone):
     url = f"https://api.green-api.com/partner/createInstance/{PARTNER_KEY}"
     try:
         res = requests.post(url, json={"plan": "developer"}, timeout=30)
         if res.status_code == 200:
             data = res.json()
-            m_id = str(data.get('idInstance'))
-            m_token = data.get('apiTokenInstance')
-            
-            if m_id and m_token:
-                supabase.table('merchants').update({
-                    "instance_id": m_id, "api_token": m_token, "session_status": "starting"
-                }).eq("Phone", phone).execute()
-                setup_webhook(m_id, m_token)
-                return m_id, m_token
-        st.error(f"❌ فشل من السيرفر: {res.text}")
-        return None, None
-    except Exception as e:
-        st.error(f"⚠️ خطأ تقني: {e}")
-        return None, None
+            return str(data.get('idInstance')), data.get('apiTokenInstance')
+    except: pass
+    return None, None
 
-def setup_webhook(m_id, m_token):
-    url = f"https://api.green-api.com/waInstance{m_id}/setSettings/{m_token}"
-    requests.post(url, json={"webhookUrl": WEBHOOK_URL, "outgoingAPIMessage": "yes", "incomingMsg": "yes"}, timeout=10)
-
+# دالة طلب كود الربط الرقمي
 def get_pairing_code(m_id, m_token, phone):
-    """طلب الكود الرقمي من Green-API للربط بدون QR"""
-    if not phone or not m_id: return None
     clean_phone = ''.join(filter(str.isdigit, str(phone)))
     url = f"https://api.green-api.com/waInstance{m_id}/getPairingCode/{m_token}"
     try:
         res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=20)
-        if res.status_code == 200: return res.json().get('code')
-    except: return None
+        if res.status_code == 200:
+            return res.json().get('code')
+    except: pass
+    return None
 
-# --- 3. نظام تسجيل الدخول ---
+# --- واجهة وتساب في Streamlit ---
+def whatsapp_tab():
+    st.subheader("📲 ربط وتساب المتجر")
+    phone = st.session_state.get('merchant_phone')
+    
+    # 1. جلب البيانات من Supabase لضمان المزامنة
+    res = supabase.table('merchants').select("*").eq("Phone", phone).execute()
+    merchant = res.data[0] if res.data else {}
+    
+    m_id = merchant.get('instance_id')
+    m_token = merchant.get('api_token')
 
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-
-if not st.session_state.logged_in:
-    t_login, t_signup = st.tabs(["🔐 دخول", "✨ حساب جديد"])
-    with t_signup:
-        with st.form("signup"):
-            name, store, phone, pw = st.text_input("الاسم"), st.text_input("المحل"), st.text_input("رقم الهاتف"), st.text_input("كلمة السر", type="password")
-            if st.form_submit_button("إنشاء الحساب"):
-                supabase.table('merchants').insert({"Merchant_name": name, "Store_name": store, "Phone": phone, "password": pw}).execute()
-                st.success("✅ تم التسجيل بنجاح!")
-
-    with t_login:
-        with st.form("login"):
-            u_phone, u_pw = st.text_input("رقم الهاتف"), st.text_input("كلمة السر", type="password")
-            if st.form_submit_button("دخول"):
-                res = supabase.table('merchants').select("*").eq("Phone", u_phone).eq("password", u_pw).execute()
-                if res.data:
-                    st.session_state.logged_in, st.session_state.merchant_phone = True, u_phone
-                    st.session_state.store_name = res.data[0].get('Store_name')
+    # الحالة أ: التاجر ليس لديه سيرفر
+    if not m_id or m_id == "None":
+        if st.button("🚀 إنشاء سيرفر وتساب جديد"):
+            with st.spinner("جاري التواصل مع Green-API..."):
+                new_id, new_token = create_instance(phone)
+                if new_id:
+                    supabase.table('merchants').update({
+                        "instance_id": new_id, "api_token": new_token
+                    }).eq("Phone", phone).execute()
+                    st.success("✅ تم إنشاء السيرفر!")
                     st.rerun()
-                else: st.error("❌ بيانات خاطئة")
-else:
-    # --- 4. واجهة المتجر الرئيسية ---
-    st.sidebar.title(f"🏪 {st.session_state.store_name}")
-    if st.sidebar.button("🚪 تسجيل خروج"):
-        st.session_state.clear()
-        st.rerun()
+                else:
+                    st.error("❌ فشل الإنشاء. تأكد من إعدادات الحساب.")
 
-    t1, t2, t3, t4 = st.tabs(["➕ منتج", "✏️ إدارة", "🛒 طلبات", "📲 واتساب"])
-
-    with t4:
-        st.subheader("📲 بوابة ربط الواتساب")
-        current_phone = st.session_state.get('merchant_phone')
+    # الحالة ب: السيرفر موجود، نحتاج للربط
+    else:
+        st.info(f"سيرفرك جاهز: {m_id}")
         
-        m_query = supabase.table('merchants').select("*").eq("Phone", current_phone).execute()
-        m_data = m_query.data[0] if m_query.data else {}
-        m_id, m_token = m_data.get('instance_id'), m_data.get('api_token')
+        # نستخدم مستوعب (Container) لعرض الكود لضمان ظهوره
+        code_container = st.container()
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔢 الحصول على كود الربط الرقمي"):
+                with st.spinner("جاري طلب الكود..."):
+                    code = get_pairing_code(m_id, m_token, phone)
+                    if code:
+                        st.session_state['last_code'] = code
+                        st.success("✅ وصل الكود!")
+                    else:
+                        st.error("❌ فشل طلب الكود. تأكد أن الرقم صحيح.")
 
-        if not m_id:
-            if st.button("🚀 تفعيل السيرفر المخصص"):
-                with st.spinner("جاري التفعيل..."):
-                    if create_merchant_instance(current_phone)[0]: st.rerun()
-        else:
-            st.info(f"سيرفرك النشط: `{m_id}`")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("🔢 طلب كود الربط الرقمي"):
-                    with st.spinner("جاري طلب الكود..."):
-                        code = get_pairing_code(m_id, m_token, current_phone)
-                        if code:
-                            st.session_state['pairing_code'] = code
-                            st.rerun()
-                
-                if 'pairing_code' in st.session_state:
-                    st.success(f"### كود الربط: `{st.session_state['pairing_code']}`")
-                    st.markdown(f"""
-                    **خطوات الربط في هاتفك ({current_phone}):**
-                    1. افتح تطبيق **WhatsApp**.
-                    2. اذهب إلى **الأجهزة المرتبطة** > **ربط جهاز**.
-                    3. اختر **الربط برقم الهاتف بدلاً من ذلك**.
-                    4. أدخل الكود الموضح أعلاه.
-                    """)
+        if 'last_code' in st.session_state:
+            with code_container:
+                st.warning(f"أدخل هذا الكود في هاتفك الآن: **{st.session_state['last_code']}**")
+                st.image("https://green-api.com/en/docs/api/introduction/pairing-code.png", caption="طريقة إدخال الكود في الهاتف")
 
-            with c2:
-                if st.button("🔍 فحص حالة الاتصال"):
-                    try:
-                        state = requests.get(f"https://api.green-api.com/waInstance{m_id}/getStateInstance/{m_token}").json().get('stateInstance')
-                        st.metric("الحالة", state)
-                        if state == 'authorized':
-                            supabase.table('merchants').update({"session_status": "connected"}).eq("Phone", current_phone).execute()
-                            st.success("✅ متصل!")
-                    except: st.error("⚠️ فشل الفحص")
-            
-            st.write("---")
-            if st.button("🗑️ حذف السيرفر"):
-                supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", current_phone).execute()
-                st.session_state.pop('pairing_code', None)
-                st.rerun()
+        with col2:
+            if st.button("🔄 فحص حالة الاتصال"):
+                check_url = f"https://api.green-api.com/waInstance{m_id}/getStateInstance/{m_token}"
+                state = requests.get(check_url).json().get('stateInstance')
+                st.metric("الحالة الحالية", state)
+                if state == 'authorized':
+                    st.success("🎉 الهاتف مرتبط ويعمل!")
+
+        if st.button("🗑️ حذف السيرفر والبدء من جديد"):
+            supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", phone).execute()
+            st.session_state.pop('last_code', None)
+            st.rerun()
