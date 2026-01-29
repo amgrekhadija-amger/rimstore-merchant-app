@@ -24,60 +24,52 @@ try:
 except Exception as e:
     st.error(f"⚠️ خطأ اتصال: {e}")
 
-# --- 2. المحرك التقني مع نظام تتبع (Tracking) ---
+# --- 2. المحرك التقني المستقر ---
 
 def create_merchant_instance(phone):
     url = f"https://api.green-api.com/partner/createInstance/{PARTNER_KEY}"
-    
-    # إنشاء حاوية رسائل لمعرفة ماذا يحدث خلف الكواليس
-    debug_space = st.empty()
-    debug_space.info("⏳ جاري إرسال الطلب إلى Green-API...")
-
     try:
-        # تحديد وقت انتظار 15 ثانية فقط لكي لا يعلق المتصفح
-        res = requests.post(url, json={"plan": "developer"}, timeout=15)
+        # طلب إنشاء السيرفر مع مهلة انتظار كافية
+        res = requests.post(url, json={"plan": "developer"}, timeout=25)
         
-        debug_space.info(f"📩 استجابة السيرفر: {res.status_code}")
-
         if res.status_code == 200:
             data = res.json()
             m_id = str(data.get('idInstance'))
             m_token = data.get('apiTokenInstance')
             
-            # تحديث Supabase
+            # تحديث قاعدة البيانات فوراً
             supabase.table('merchants').update({
-                "instance_id": m_id, "api_token": m_token, "session_status": "starting"
+                "instance_id": m_id, 
+                "api_token": m_token, 
+                "session_status": "starting"
             }).eq("Phone", phone).execute()
             
-            debug_space.success("✅ نجح التفعيل! جاري التحديث...")
-            return m_id, m_token
-        else:
-            debug_space.error(f"❌ فشل السيرفر: {res.status_code}")
-            st.write("تفاصيل الرد:", res.text)
+            # ضبط الويب هوك للرد الآلي
+            requests.post(f"https://api.green-api.com/waInstance{m_id}/setSettings/{m_token}", 
+                          json={"webhookUrl": WEBHOOK_URL, "incomingMsg": "yes"})
             
-    except requests.exceptions.Timeout:
-        debug_space.error("⏰ انتهى وقت الانتظار! السيرفر بطيء جداً أو الرابط محجوب.")
+            return m_id, m_token
     except Exception as e:
-        debug_space.error(f"💥 خطأ تقني: {str(e)}")
-        
+        st.error(f"💥 عطل فني: {str(e)}")
     return None, None
 
 def get_pairing_code(m_id, m_token, phone):
+    # تنظيف الرقم من أي رموز لضمان قبول Green-API
     clean_phone = ''.join(filter(str.isdigit, str(phone)))
     url = f"https://api.green-api.com/waInstance{m_id}/getPairingCode/{m_token}"
     try:
-        res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=15)
+        res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=20)
         if res.status_code == 200:
             return res.json().get('code')
     except: pass
     return None
 
-# --- 3. الواجهة الرئيسية ---
+# --- 3. نظام الجلسة ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    # (كود الدخول كما هو)
+    # واجهة تسجيل الدخول
     with st.form("login"):
         u_phone = st.text_input("رقم الهاتف")
         u_pw = st.text_input("كلمة السر", type="password")
@@ -88,47 +80,75 @@ if not st.session_state.logged_in:
                 st.session_state.merchant_phone = u_phone
                 st.session_state.store_name = res.data[0].get('Store_name')
                 st.rerun()
+            else: st.error("بيانات خاطئة")
 else:
+    # واجهة التاجر
     st.sidebar.title(f"🏪 {st.session_state.store_name}")
     tabs = st.tabs(["➕ منتج", "✏️ إدارة", "🛒 طلبات", "📲 واتساب"])
 
     with tabs[3]:
-        st.subheader("📲 إعدادات اتصال الواتساب")
+        st.subheader("📲 بوابة ربط الواتساب")
         current_phone = st.session_state.get('merchant_phone')
         
-        # جلب البيانات من Supabase
-        m_data = supabase.table('merchants').select("*").eq("Phone", current_phone).single().execute().data
+        # جلب البيانات "طازجة" من الداتابيز في كل مرة يفتح فيها التبويب
+        m_query = supabase.table('merchants').select("*").eq("Phone", current_phone).execute()
+        m_data = m_query.data[0] if m_query.data else {}
         m_id = m_data.get('instance_id')
         m_token = m_data.get('api_token')
 
+        # الحالة 1: لا يوجد سيرفر
         if not m_id or m_id == "None":
-            st.warning("⚠️ لا يوجد سيرفر نشط لمتجرك.")
+            st.info("لم يتم تفعيل سيرفر الواتساب لمتجرك بعد.")
             if st.button("🚀 تفعيل السيرفر الآن"):
-                # استخدام spinner لا يختفي إلا بالنتيجة
-                with st.spinner("انتظري قليلاً، نجهز بوابتك..."):
-                    result = create_merchant_instance(current_phone)
-                    if result and result[0]:
-                        time.sleep(1)
+                with st.spinner("جاري إنشاء السيرفر الخاص بك..."):
+                    new_id, new_token = create_merchant_instance(current_phone)
+                    if new_id:
+                        st.success(f"تم إنشاء السيرفر بنجاح! رقم الجهاز: {new_id}")
+                        time.sleep(2) # انتظار قصير للتأكد من حفظ الداتابيز
                         st.rerun()
+
+        # الحالة 2: السيرفر موجود، بانتظار الربط بالهاتف
         else:
-            st.markdown(f"<div class='status-card'>✅ السيرفر <b>{m_id}</b> نشط</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='status-card'>✅ سيرفر متجرك نشط برقم: <b>{m_id}</b></div>", unsafe_allow_html=True)
             
+            st.write("---")
             col_l, col_r = st.columns(2)
+            
             with col_l:
-                if st.button("🔢 طلب كود الربط"):
-                    code = get_pairing_code(m_id, m_token, current_phone)
-                    if code: st.session_state['p_code'] = code
-                
-                if 'p_code' in st.session_state:
-                    st.markdown(f"<div class='code-box'>{st.session_state['p_code']}</div>", unsafe_allow_html=True)
-                    st.info("أدخل الكود في هاتفك.")
+                st.write("### 1. طلب كود الربط")
+                if st.button("🔢 استخراج الكود"):
+                    with st.spinner("جاري جلب الكود..."):
+                        p_code = get_pairing_code(m_id, m_token, current_phone)
+                        if p_code:
+                            st.session_state['last_p_code'] = p_code
+                        else:
+                            st.error("فشل طلب الكود. تأكد أن الهاتف صحيح.")
+
+                if 'last_p_code' in st.session_state:
+                    st.markdown(f"<div class='code-box'>{st.session_state['last_p_code']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"""
+                    **خطوات الربط في هاتفك:**
+                    1. افتح واتساب على هاتفك الرقم (**{current_phone}**).
+                    2. اذهب لـ **الأجهزة المرتبطة** > **ربط جهاز**.
+                    3. اختر **الربط برقم الهاتف بدلاً من ذلك**.
+                    4. أدخل الكود الظاهر أعلاه.
+                    """)
 
             with col_r:
-                if st.button("🔄 تحديث الحالة"):
-                    res = requests.get(f"https://api.green-api.com/waInstance{m_id}/getStateInstance/{m_token}")
-                    st.metric("حالة الربط", res.json().get('stateInstance'))
+                st.write("### 2. فحص الاتصال")
+                if st.button("🔄 تحديث حالة الهاتف"):
+                    try:
+                        check_res = requests.get(f"https://api.green-api.com/waInstance{m_id}/getStateInstance/{m_token}", timeout=10)
+                        status = check_res.json().get('stateInstance')
+                        st.metric("حالة الهاتف الآن", status)
+                        if status == "authorized":
+                            st.success("🎉 مبروك! متجرك الآن مرتبط بالواتساب.")
+                    except:
+                        st.error("السيرفر لا يستجيب حالياً.")
 
-            if st.button("🗑️ حذف السيرفر"):
-                supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", current_phone).execute()
-                st.session_state.pop('p_code', None)
-                st.rerun()
+            st.write("---")
+            if st.button("🗑️ حذف وإعادة ضبط السيرفر"):
+                if st.checkbox("أؤكد رغبتي في الحذف"):
+                    supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", current_phone).execute()
+                    st.session_state.pop('last_p_code', None)
+                    st.rerun()
