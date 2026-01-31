@@ -12,7 +12,7 @@ PARTNER_API_URL = "https://api.green-api.com"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- 2. دالة ربط Green-API (بدون أي تغيير) ---
+# --- 2. دالة ربط Green-API (تم تحسين سرعة الاستجابة) ---
 def start_full_connection(phone):
     create_url = f"{PARTNER_API_URL}/partner/createInstance/{PARTNER_TOKEN}"
     try:
@@ -21,14 +21,17 @@ def start_full_connection(phone):
             data = response.json()
             m_id, m_token = str(data.get('idInstance')), data.get('apiTokenInstance')
             
+            # تحديث قاعدة البيانات الفوري
             supabase.table('merchants').update({
                 "instance_id": m_id, 
                 "api_token": m_token
             }).eq("Phone", phone).execute()
             
-            time.sleep(4) 
+            # تقليل وقت الانتظار قليلاً لسرعة التجربة
+            time.sleep(3) 
             clean_phone = ''.join(filter(str.isdigit, str(phone)))
             pairing_url = f"{PARTNER_API_URL}/waInstance{m_id}/getPairingCode/{m_token}?phoneNumber={clean_phone}"
+            
             p_res = requests.get(pairing_url, timeout=20)
             if p_res.status_code == 200:
                 p_code = p_res.json().get('code')
@@ -107,13 +110,10 @@ with t2:
                     supabase.table('products').update({"Status": not p['Status']}).eq("created_at", p['created_at']).execute()
                     st.rerun()
 
-# --- التعديل المطور لتبويب الطلبات (الفصل التام للبيانات) ---
 with t3:
     st.subheader("🛒 إدارة طلبات الزبائن")
     try:
-        # جلب الطلبات الخاصة بهذا التاجر فقط
         orders_res = supabase.table('orders').select("*").eq("merchant_phc", st.session_state.merchant_phone).execute()
-        
         if orders_res.data:
             for o in orders_res.data:
                 with st.container():
@@ -125,8 +125,6 @@ with t3:
                         <p style="margin:5px 0;">⏳ <b>الحالة:</b> {o.get('status', 'طلب جديد')}</p>
                     </div>
                     """, unsafe_allow_html=True)
-                    
-                    # زر تحديث الحالة (يتطلب Primary Key في Supabase)
                     if o.get('status') != "تم التوصيل":
                         if st.button("✅ تم التوصيل", key=f"done_{o.get('created_at')}"):
                             supabase.table('orders').update({"status": "تم التوصيل"}).eq("created_at", o.get('created_at')).execute()
@@ -136,7 +134,7 @@ with t3:
         else:
             st.info("لا توجد طلبات جديدة حالياً.")
     except Exception as e:
-        st.error("⚠️ تنبيه: لا يمكن الوصول لجدول الطلبات. تأكدي من إعدادات RLS.")
+        st.error("⚠️ تنبيه: لا يمكن الوصول لجدول الطلبات.")
 
 with t4:
     st.subheader("📲 ربط الواتساب")
@@ -144,17 +142,40 @@ with t4:
     if res.data:
         merchant = res.data[0]
         st.write(f"مرحباً يا {merchant.get('Merchant_name')}")
+        
+        # تحسين: إذا لم يكن هناك Instance ID ابدأ عملية الربط
         if not merchant.get('instance_id') or merchant.get('instance_id') == "None":
             if st.button("🚀 البدء: إنشاء مثيل وطلب كود الربط"):
                 with st.spinner("جاري الاتصال بـ Green-API..."):
                     m_id, code = start_full_connection(st.session_state.merchant_phone)
-                    if code: st.session_state.current_p_code = code; st.rerun()
+                    if code: 
+                        st.session_state.current_p_code = code
+                        st.balloons()
+                        st.rerun()
         else:
+            # إذا كان الحساب مربوطاً مسبقاً
             st.info(f"الجلسة مفعلة: {merchant.get('instance_id')}")
-            if st.button("🔢 طلب كود ربط جديد"):
-                m_id, m_token = merchant.get('instance_id'), merchant.get('api_token')
-                clean_ph = ''.join(filter(str.isdigit, str(st.session_state.merchant_phone)))
-                p_url = f"{PARTNER_API_URL}/waInstance{m_id}/getPairingCode/{m_token}?phoneNumber={clean_ph}"
-                st.session_state.current_p_code = requests.get(p_url).json().get('code')
+            col_link1, col_link2 = st.columns(2)
+            with col_link1:
+                if st.button("🔢 طلب كود ربط جديد"):
+                    m_id, m_token = merchant.get('instance_id'), merchant.get('api_token')
+                    clean_ph = ''.join(filter(str.isdigit, str(st.session_state.merchant_phone)))
+                    p_url = f"{PARTNER_API_URL}/waInstance{m_id}/getPairingCode/{m_token}?phoneNumber={clean_ph}"
+                    try:
+                        resp = requests.get(p_url)
+                        if resp.status_code == 200:
+                            st.session_state.current_p_code = resp.json().get('code')
+                            st.rerun()
+                        else:
+                            st.error("فشل جلب الكود، تأكد من حالة الجهاز.")
+                    except:
+                        st.error("خطأ في الاتصال بالسيرفر.")
+            
+            # عرض كود الربط بتصميم واضح جداً
             if 'current_p_code' in st.session_state:
-                st.markdown(f"<h1 style='text-align:center; color:#128c7e;'>{st.session_state.current_p_code}</h1>", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style="text-align:center; padding:20px; border:3px dashed #128c7e; border-radius:15px; background-color:#f0f7f4; margin-top:20px;">
+                    <p style="color:#075e54; margin-bottom:5px;">أدخل هذا الكود في واتساب هاتفك الآن:</p>
+                    <h1 style="color:#128c7e; font-size:60px; font-family:monospace; letter-spacing:10px;">{st.session_state.current_p_code}</h1>
+                </div>
+                """, unsafe_allow_html=True)
