@@ -12,7 +12,7 @@ PARTNER_API_URL = "https://api.green-api.com"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- 2. دالة ربط Green-API (بقيت كما هي تماماً) ---
+# --- 2. دالة ربط Green-API (بدون أي تغيير) ---
 def start_full_connection(phone):
     create_url = f"{PARTNER_API_URL}/partner/createInstance/{PARTNER_TOKEN}"
     try:
@@ -107,29 +107,36 @@ with t2:
                     supabase.table('products').update({"Status": not p['Status']}).eq("created_at", p['created_at']).execute()
                     st.rerun()
 
-# --- التعديل الجذري لحل خطأ APIError في الطلبات ---
+# --- التعديل المطور لتبويب الطلبات (الفصل التام للبيانات) ---
 with t3:
-    st.subheader("🛒 طلبات الزبائن")
+    st.subheader("🛒 إدارة طلبات الزبائن")
     try:
-        # فحص وجود الطلبات مع معالجة الأخطاء
+        # جلب الطلبات الخاصة بهذا التاجر فقط
         orders_res = supabase.table('orders').select("*").eq("merchant_phc", st.session_state.merchant_phone).execute()
+        
         if orders_res.data:
             for o in orders_res.data:
-                st.markdown(f"""
-                <div style="border:1px solid #ddd; padding:15px; border-radius:10px; margin-bottom:10px; background-color:#f9f9f9;">
-                    <p><b>📱 رقم الزبون:</b> {o.get('customer_pho')}</p>
-                    <p><b>🛍️ المنتج:</b> {o.get('product_name')}</p>
-                    <p><b>💰 الإجمالي:</b> {o.get('total_price')}</p>
-                    <p><b>📍 العنوان:</b> {o.get('delivery_addre', 'لا يوجد')}</p>
-                    <hr>
-                    <small>تاريخ الطلب: {o.get('created_at')}</small>
-                </div>
-                """, unsafe_allow_html=True)
+                with st.container():
+                    st.markdown(f"""
+                    <div style="border-right: 5px solid #128c7e; padding:15px; background-color:#f9f9f9; border-radius:10px; margin-bottom:10px; color: black;">
+                        <h4 style="margin:0;">👤 زبون: {o.get('customer_pho')}</h4>
+                        <p style="margin:5px 0;">🛍️ <b>المنتج:</b> {o.get('product_name')} | 💰 <b>السعر:</b> {o.get('total_price')}</p>
+                        <p style="margin:5px 0;">📍 <b>العنوان:</b> {o.get('delivery_addre', 'غير محدد')}</p>
+                        <p style="margin:5px 0;">⏳ <b>الحالة:</b> {o.get('status', 'طلب جديد')}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # زر تحديث الحالة (يتطلب Primary Key في Supabase)
+                    if o.get('status') != "تم التوصيل":
+                        if st.button("✅ تم التوصيل", key=f"done_{o.get('created_at')}"):
+                            supabase.table('orders').update({"status": "تم التوصيل"}).eq("created_at", o.get('created_at')).execute()
+                            st.success("تم تحديث الطلب!")
+                            st.rerun()
+                    st.divider()
         else:
             st.info("لا توجد طلبات جديدة حالياً.")
     except Exception as e:
-        st.error(f"⚠️ تنبيه: لا يمكن الوصول لجدول الطلبات حالياً.")
-        st.info("تأكدي من تفعيل صلاحيات RLS لجدول orders في Supabase.")
+        st.error("⚠️ تنبيه: لا يمكن الوصول لجدول الطلبات. تأكدي من إعدادات RLS.")
 
 with t4:
     st.subheader("📲 ربط الواتساب")
@@ -151,5 +158,3 @@ with t4:
                 st.session_state.current_p_code = requests.get(p_url).json().get('code')
             if 'current_p_code' in st.session_state:
                 st.markdown(f"<h1 style='text-align:center; color:#128c7e;'>{st.session_state.current_p_code}</h1>", unsafe_allow_html=True)
-               
-        
