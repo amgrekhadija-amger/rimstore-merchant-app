@@ -3,7 +3,7 @@ import os, requests, time
 from dotenv import load_dotenv
 from supabase import create_client
 
-# --- 1. الإعدادات والجماليات ---
+# --- 1. الإعدادات والجماليات (ثابتة كما طلبتِ) ---
 load_dotenv()
 PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
 PARTNER_API_URL = "https://api.green-api.com"
@@ -27,7 +27,6 @@ supabase = create_client(url, key)
 # --- 2. محرك العمليات ---
 
 def create_instance(phone):
-    """إنشاء السيرفر وحفظ بياناته فوراً"""
     create_url = f"{PARTNER_API_URL}/partner/createInstance/{PARTNER_KEY}"
     try:
         res = requests.post(create_url, json={"plan": "developer"}, timeout=30)
@@ -35,36 +34,34 @@ def create_instance(phone):
             data = res.json()
             m_id = str(data.get('idInstance'))
             m_token = data.get('apiTokenInstance')
-            # تحديث الداتابيز
             supabase.table('merchants').update({"instance_id": m_id, "api_token": m_token}).eq("Phone", phone).execute()
-            # ضبط الإعدادات
             requests.post(f"{PARTNER_API_URL}/waInstance{m_id}/setSettings/{m_token}", json={"webhookUrl": WEBHOOK_URL, "incomingMsg": "yes"})
             return True
     except: pass
     return False
 
-def get_pairing_code(m_id, m_token, phone):
-    """جلب الكود وحفظه في عمود pairing_code"""
+def get_pairing_code_with_retry(m_id, m_token, phone):
+    """محاولة الجلب أكثر من مرة لضمان عدم التعليق"""
     clean_phone = ''.join(filter(str.isdigit, str(phone)))
-    # تسجيل خروج لضمان طلب كود جديد
     requests.post(f"{PARTNER_API_URL}/waInstance{m_id}/logout/{m_token}")
-    time.sleep(1) 
     
     url = f"{PARTNER_API_URL}/waInstance{m_id}/getPairingCode/{m_token}"
-    try:
-        res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=20)
-        if res.status_code == 200:
-            p_code = res.json().get('code')
-            supabase.table('merchants').update({"pairing_code": p_code}).eq("Phone", phone).execute()
-            return p_code
-    except: pass
+    for _ in range(3): # محاولة 3 مرات في حال كان السيرفر مشغولاً
+        try:
+            res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=20)
+            if res.status_code == 200:
+                p_code = res.json().get('code')
+                if p_code:
+                    supabase.table('merchants').update({"pairing_code": p_code}).eq("Phone", phone).execute()
+                    return p_code
+        except: pass
+        time.sleep(2)
     return None
 
 # --- 3. الدخول والجلسة ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    # (كود تسجيل الدخول المبسط)
     with st.form("login"):
         u_phone = st.text_input("رقم الهاتف")
         u_pw = st.text_input("كلمة السر", type="password")
@@ -76,58 +73,55 @@ if not st.session_state.logged_in:
                 st.rerun()
     st.stop()
 
-# --- 4. واجهة التاجر ---
+# --- 4. واجهة التاجر (نفس التصميم المطلوب) ---
 tabs = st.tabs(["➕ إضافة منتج", "🛒 الطلبات", "📲 ربط الواتساب"])
 
-# تبويب المنتجات (الخانات المطلوبة)
+# تبويب المنتجات (الخانات المطلوبة: اسم، رقم، سعر، صورة)
 with tabs[0]:
     st.subheader("📦 إضافة منتج جديد")
     with st.form("add_p", clear_on_submit=True):
         p_name = st.text_input("اسم المنتج")
         p_code_sku = st.text_input("رقم المنتج (Code)")
-        p_price = st.text_input("السعر")
-        p_img = st.file_uploader("صورة المنتج", type=['jpg', 'png', 'jpeg'])
+        p_price = st.text_input("سعر المنتج")
+        p_img = st.file_uploader("رفع صورة المنتج", type=['jpg', 'png', 'jpeg'])
         if st.form_submit_button("حفظ المنتج"):
-            supabase.table('products').insert({"Product": p_name, "Price": p_price, "Phone": st.session_state.merchant_phone}).execute()
-            st.success("تم الحفظ!")
+            supabase.table('products').insert({
+                "Product": p_name, 
+                "Price": p_price, 
+                "Phone": st.session_state.merchant_phone
+            }).execute()
+            st.success("✅ تم حفظ المنتج!")
 
-# تبويب الواتساب (الحل الجذري)
+# تبويب الواتساب (الإصلاح الجذري للجلب)
 with tabs[2]:
     st.subheader("📲 بوابة ربط الواتساب")
     curr_phone = st.session_state.merchant_phone
-    
-    # جلب البيانات "الآن" من الداتابيز
     m_res = supabase.table('merchants').select("*").eq("Phone", curr_phone).execute()
     m_data = m_res.data[0] if m_res.data else {}
     m_id = m_data.get('instance_id')
     m_token = m_data.get('api_token')
     saved_code = m_data.get('pairing_code')
 
-    # الحالة 1: لا يوجد سيرفر نهائياً
     if not m_id or m_id == "None":
         st.warning("سيرفرك غير مفعل حالياً.")
         if st.button("🚀 إنشاء وتفعيل السيرفر الآن"):
-            with st.spinner("جاري الإنشاء..."):
+            with st.spinner("جاري إنشاء السيرفر..."):
                 if create_instance(curr_phone):
-                    st.success("تم إنشاء السيرفر بنجاح!")
-                    time.sleep(2)
-                    st.rerun() # التحديث هنا هو الأهم ليظهر زر الكود
-
-    # الحالة 2: السيرفر موجود (ID موجود في الداتابيز)
+                    st.success("تم الإنشاء! اضغط الآن على زر طلب الكود بالأسفل.")
+                    time.sleep(1)
+                    st.rerun()
     else:
         st.markdown(f"<div class='status-card'>✅ سيرفرك جاهز | المعرف: <b>{m_id}</b></div>", unsafe_allow_html=True)
         
-        if st.button("🔢 اطلب كود الربط (8 أرقام)"):
+        # الزر الذي سيجلب الـ 8 أرقام فوراً
+        if st.button("🔢 اطلب كود الربط الآن"):
             with st.spinner("جاري جلب الكود من Green-API..."):
-                code = get_pairing_code(m_id, m_token, curr_phone)
+                code = get_pairing_code_with_retry(m_id, m_token, curr_phone)
                 if code:
-                    st.success("تم جلب الكود!")
-                    time.sleep(1)
                     st.rerun()
                 else:
-                    st.error("فشل الجلب، تأكد أن السيرفر غير مرتبط بجهاز آخر.")
+                    st.error("السيرفر مشغول، حاول مرة أخرى خلال ثوانٍ.")
 
-        # عرض الكود إذا كان مخزناً في الداتابيز
         if saved_code:
             st.markdown(f"<div class='code-box'>{saved_code}</div>", unsafe_allow_html=True)
             st.info(f"أدخل الكود في هاتفك المتصل بالرقم {curr_phone}")
@@ -136,4 +130,3 @@ with tabs[2]:
     if st.button("🗑️ حذف وإعادة ضبط السيرفر"):
         supabase.table('merchants').update({"instance_id": None, "api_token": None, "pairing_code": None}).eq("Phone", curr_phone).execute()
         st.rerun()
-   
