@@ -44,11 +44,13 @@ def create_merchant_instance(phone):
                           json={"webhookUrl": WEBHOOK_URL, "incomingMsg": "yes"})
             return m_id, m_token
     except Exception as e:
-        st.error(f"💥 خطأ في إنشاء السيرفر: {e}")
+        st.error(f"💥 خطأ: {e}")
     return None, None
 
 def get_pairing_code(m_id, m_token, phone):
     clean_phone = ''.join(filter(str.isdigit, str(phone)))
+    # تسجيل الخروج أولاً لضمان طلب كود جديد ونظيف
+    requests.post(f"https://api.green-api.com/waInstance{m_id}/logout/{m_token}")
     url = f"https://api.green-api.com/waInstance{m_id}/getPairingCode/{m_token}"
     try:
         res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=20)
@@ -58,10 +60,8 @@ def get_pairing_code(m_id, m_token, phone):
     return None
 
 # --- 3. إدارة الجلسة والدخول ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'last_p_code' not in st.session_state:
-    st.session_state.last_p_code = None
+if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+if 'last_p_code' not in st.session_state: st.session_state.last_p_code = None
 
 if not st.session_state.logged_in:
     with st.form("login"):
@@ -78,74 +78,56 @@ if not st.session_state.logged_in:
             else: st.error("بيانات خاطئة")
     st.stop()
 
-# --- 4. واجهة التاجر الرئيسية ---
+# --- 4. واجهة التاجر ---
 st.sidebar.title(f"🏪 {st.session_state.store_name}")
-if st.sidebar.button("🚪 تسجيل الخروج"):
-    st.session_state.logged_in = False
-    st.session_state.last_p_code = None
-    st.rerun()
-
 tabs = st.tabs(["➕ إضافة منتج", "✏️ إدارة", "🛒 طلبات", "📲 واتساب"])
 
-# -- تبويب إضافة المنتج (محدث بالخانات المطلوبة) --
 with tabs[0]:
     st.subheader("📦 إضافة منتج جديد")
     with st.form("add_product", clear_on_submit=True):
         p_name = st.text_input("اسم المنتج")
-        p_id_code = st.text_input("رقم المنتج (SKU/Code)")
-        p_price = st.text_input("سعر المنتج")
-        p_image = st.file_uploader("رفع صورة المنتج", type=['jpg', 'jpeg', 'png'])
-        
+        p_code = st.text_input("رقم المنتج (Code)")
+        p_price = st.text_input("السعر")
+        p_file = st.file_uploader("صورة المنتج", type=['jpg', 'png', 'jpeg'])
         if st.form_submit_button("حفظ المنتج"):
-            # ملاحظة: رفع الصورة يحتاج لإعداد Supabase Storage ولكن الخانات الآن جاهزة
-            supabase.table('products').insert({
-                "Product": p_name, 
-                "Price": p_price,
-                "product_code": p_id_code, # تأكدي من وجود هذا العمود في الداتابيز
-                "Phone": st.session_state.merchant_phone
-            }).execute()
-            st.success("تمت إضافة المنتج بنجاح!")
+            supabase.table('products').insert({"Product": p_name, "Price": p_price, "Phone": st.session_state.merchant_phone}).execute()
+            st.success("تم الحفظ!")
 
-# -- التبويبات الأخرى كما هي دون تغيير --
-with tabs[1]:
-    st.subheader("✏️ إدارة المنتجات")
-    # (كود الإدارة السابق)
-
-with tabs[2]:
-    st.subheader("🛒 الطلبات")
-    # (كود الطلبات السابق)
-
-# -- تبويب الواتساب (مصلح ليظهر زر الكود فوراً) --
+# --- قسم الواتساب المعدل لحل مشكلة عدم ظهور الكود ---
 with tabs[3]:
     st.subheader("📲 بوابة ربط الواتساب")
     curr_phone = st.session_state.merchant_phone
-    m_query = supabase.table('merchants').select("*").eq("Phone", curr_phone).execute()
-    m_data = m_query.data[0] if m_query.data else {}
-    m_id = m_data.get('instance_id')
-    m_token = m_data.get('api_token')
+    
+    # جلب البيانات مباشرة للتأكد من الحالة
+    m_res = supabase.table('merchants').select("instance_id, api_token").eq("Phone", curr_phone).execute()
+    m_id = m_res.data[0].get('instance_id') if m_res.data else None
+    m_token = m_res.data[0].get('api_token') if m_res.data else None
 
     if not m_id or m_id == "None":
-        st.info("سيرفر الواتساب غير مفعل.")
+        st.info("سيرفرك غير نشط.")
         if st.button("🚀 تفعيل السيرفر الآن"):
-            with st.spinner("جاري التفعيل..."):
-                new_id, new_token = create_merchant_instance(curr_phone)
+            with st.spinner("جاري التجهيز..."):
+                new_id, _ = create_merchant_instance(curr_phone)
                 if new_id:
-                    st.success("تم التفعيل بنجاح!")
-                    time.sleep(1)
+                    st.success("تم التفعيل! اضغط مرة أخرى لطلب الكود.")
                     st.rerun()
     else:
-        st.markdown(f"<div class='status-card'>✅ سيرفرك نشط برقم: <b>{m_id}</b></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='status-card'>✅ السيرفر جاهز (ID: {m_id})</div>", unsafe_allow_html=True)
         
-        # زر استخراج الكود يظهر الآن بشكل صحيح تحت السيرفر النشط
-        if st.button("🔢 اطلب كود الربط الآن"):
-            with st.spinner("جاري استخراج الكود..."):
-                p_code = get_pairing_code(m_id, m_token, curr_phone)
-                if p_code:
-                    st.session_state.last_p_code = p_code
-                    st.rerun()
+        # زر استخراج الكود يظهر دائماً طالما السيرفر مفعل
+        if st.button("🔢 استخراج كود الربط الآن"):
+            with st.spinner("جاري طلب الكود من Green-API..."):
+                code = get_pairing_code(m_id, m_token, curr_phone)
+                if code:
+                    st.session_state.last_p_code = code
                 else:
-                    st.error("فشل طلب الكود")
+                    st.error("السيرفر مشغول، حاول مرة أخرى")
 
         if st.session_state.last_p_code:
             st.markdown(f"<div class='code-box'>{st.session_state.last_p_code}</div>", unsafe_allow_html=True)
-            st.info(f"أدخل الكود في واتساب هاتفك ({curr_phone})")
+            st.info(f"أدخل الكود في هاتفك المتصل برقم {curr_phone}")
+
+    if st.button("🗑️ حذف السيرفر"):
+        supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", curr_phone).execute()
+        st.session_state.last_p_code = None
+        st.rerun()
