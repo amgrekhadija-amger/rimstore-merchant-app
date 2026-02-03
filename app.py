@@ -1,4 +1,4 @@
-هimport streamlit as st
+import streamlit as st
 import requests, time
 from supabase import create_client
 
