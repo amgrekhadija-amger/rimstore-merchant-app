@@ -1,91 +1,73 @@
 import streamlit as st
-import requests, os, time
+import requests, time, os
 from supabase import create_client
 
-# إعدادات ثابتة
-PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# --- 1. الإعدادات الرسمية (من التوثيق الذي أرسلتِه) ---
+PARTNER_TOKEN = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
+PARTNER_API_URL = "https://api.green-api.com" # partnerApiUrl
 
-def get_status(m_id, m_token):
-    """فحص هل الجهاز مرتبط بالواتساب أم لا"""
-    url = f"https://api.green-api.com/waInstance{m_id}/getStateInstance/{m_token}"
-    try:
-        res = requests.get(url, timeout=10)
-        return res.json().get('stateInstance')
-    except: return "error"
+# اتصال Supabase
+supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-def force_get_code(m_id, m_token, phone):
-    """محاولة جلب الكود الرقمي بقوة"""
-    # تنظيف الرقم (يجب أن يبدأ بمفتاح الدولة بدون +)
+def setup_instance_scenario(phone):
+    """تطبيق السيناريو الموصى به من Green-API"""
     clean_phone = ''.join(filter(str.isdigit, str(phone)))
-    url = f"https://api.green-api.com/waInstance{m_id}/getPairingCode/{m_token}"
+    
+    # الخطوة 1: إنشاء السيرفر
+    create_url = f"{PARTNER_API_URL}/partner/createInstance/{PARTNER_TOKEN}"
     try:
-        # إرسال طلب الكود
-        res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=20)
+        res = requests.post(create_url, json={"plan": "developer"}, timeout=30)
         if res.status_code == 200:
-            return res.json().get('code')
-    except: pass
-    return None
+            data = res.json()
+            m_id = str(data['idInstance'])
+            m_token = data['apiTokenInstance']
+            
+            # حفظ البيانات فوراً لكي يقرأها الكود في المرة القادمة
+            supabase.table('merchants').update({
+                "instance_id": m_id, 
+                "api_token": m_token
+            }).eq("Phone", phone).execute()
+            
+            # الخطوة 2: انتظار بسيط للتهيئة (كما في المقال)
+            time.sleep(5)
+            
+            # الخطوة 3: طلب كود الربط (Link with phone number)
+            code_url = f"https://api.green-api.com/waInstance{m_id}/getPairingCode/{m_token}"
+            code_res = requests.post(code_url, json={"phoneNumber": clean_phone})
+            
+            if code_res.status_code == 200:
+                p_code = code_res.json().get('code')
+                supabase.table('merchants').update({"pairing_code": p_code}).eq("Phone", phone).execute()
+                return p_code, m_id
+    except Exception as e:
+        st.error(f"عطل في تنفيذ السيناريو: {e}")
+    return None, None
 
 # --- واجهة المستخدم ---
-if 'logged_in' in st.session_state and st.session_state.logged_in:
-    phone = st.session_state.merchant_phone
-    
-    # 1. جلب بيانات التاجر من Supabase
-    res = supabase.table('merchants').select("*").eq("Phone", phone).execute()
-    merchant = res.data[0] if res.data else {}
-    
-    st.subheader(f"🏪 متجر: {merchant.get('Store_name', 'غير معروف')}")
-    
-    m_id = merchant.get('instance_id')
-    m_token = merchant.get('api_token')
+st.title("📲 بوابة الربط الاحترافية")
+current_phone = st.session_state.get('merchant_phone')
 
-    # 2. التحقق من وجود سيرفر
-    if not m_id or m_id == "None":
-        st.warning("⚠️ لا يوجد سيرفر مربوط بهذا الرقم حالياً.")
-        if st.button("🚀 إنشاء سيرفر جديد الآن"):
-            # كود إنشاء السيرفر (نفسه السابق)
-            create_url = f"https://api.green-api.com/partner/createInstance/{PARTNER_KEY}"
-            res_c = requests.post(create_url, json={"plan": "developer"})
-            if res_c.status_code == 200:
-                data = res_c.json()
-                # حفظ البيانات فوراً
-                supabase.table('merchants').update({
-                    "instance_id": str(data['idInstance']),
-                    "api_token": data['apiTokenInstance']
-                }).eq("Phone", phone).execute()
-                st.success("تم إنشاء السيرفر! جاري التحديث...")
-                time.sleep(2)
+# قراءة البيانات الحالية
+m_data = supabase.table('merchants').select("*").eq("Phone", current_phone).single().execute().data
+
+if m_data:
+    m_id = m_data.get('instance_id')
+    saved_code = m_data.get('pairing_code')
+
+    # إذا لم يكن هناك سيرفر أو كان هناك تكرار، نبدأ السيناريو
+    if not m_id or st.button("🔄 إعادة محاولة الربط (السيناريو الموصى به)"):
+        with st.spinner("جاري إنشاء وتهيئة السيرفر وقراءة الكود..."):
+            new_code, new_id = setup_instance_scenario(current_phone)
+            if new_code:
+                st.success(f"تم إنشاء السيرفر {new_id} وجلب الكود بنجاح!")
                 st.rerun()
-    else:
-        # 3. السيرفر موجود -> فحص الحالة
-        status = get_status(m_id, m_token)
-        
-        if status == "authorized":
-            st.success(f"✅ الواتساب مرتبط بنجاح (Instance: {m_id})")
-        else:
-            st.info(f"🔄 السيرفر جاهز (ID: {m_id}) ولكن يحتاج ربط بالهاتف.")
-            
-            if st.button("🔢 الحصول على كود الربط الرقمي"):
-                with st.spinner("جاري جلب الكود من WhatsApp..."):
-                    p_code = force_get_code(m_id, m_token, phone)
-                    if p_code:
-                        st.session_state['pairing_code'] = p_code
-                    else:
-                        st.error("فشل جلب الكود. تأكد أن الرقم في هاتفك هو نفس الرقم المسجل.")
 
-            if 'pairing_code' in st.session_state:
-                st.markdown(f"""
-                <div style="text-align:center; background:#e3f2fd; padding:20px; border-radius:10px; border:2px dashed #2196f3;">
-                    <h1 style="color:#075E54; font-size:50px;">{st.session_state['pairing_code']}</h1>
-                    <p>أدخل هذا الكود في هاتفك الآن</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-    # زر إعادة الضبط (للتخلص من السيرفرات المعلقة)
-    st.write("---")
-    if st.sidebar.button("🗑️ حذف السيرفر الحالي والبدء من جديد"):
-        supabase.table('merchants').update({"instance_id": None, "api_token": None}).eq("Phone", phone).execute()
-        st.rerun()
+    # عرض النتائج
+    if saved_code:
+        st.markdown(f"""
+            <div style="text-align:center; background:#f0f7ff; padding:25px; border-radius:15px; border:2px solid #2196f3;">
+                <h3 style="color:#0d47a1;">كود الربط المباشر:</h3>
+                <h1 style="font-size:60px; color:#1565c0; font-family:monospace;">{saved_code}</h1>
+                <p>أدخل الكود في هاتفك (الرقم: {current_phone})</p>
+            </div>
+        """, unsafe_allow_html=True)
