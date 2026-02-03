@@ -2,85 +2,71 @@ import streamlit as st
 import requests, time
 from supabase import create_client
 
-# 1. الإعدادات الرسمية
+# إعدادات الشريك
 PARTNER_TOKEN = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
-API_URL = "https://api.green-api.com"
+PARTNER_API_URL = "https://api.green-api.com"
 
-# 2. اتصال Supabase
-url = st.secrets["SUPABASE_URL"]
-key = st.secrets["SUPABASE_KEY"]
-supabase = create_client(url, key)
+# اتصال Supabase
+supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-# --- دالة تسجيل الدخول ---
-def login_page():
-    st.title("🔐 تسجيل الدخول - ريم ستور")
-    with st.form("login_form"):
-        u_phone = st.text_input("رقم الهاتف")
-        u_pass = st.text_input("كلمة السر", type="password")
-        if st.form_submit_button("دخول"):
-            # البحث في الجدول باستخدام الأعمدة الصحيحة من صورتك
-            res = supabase.table('merchants').select("*").eq("Phone", u_phone).eq("password", u_pass).execute()
-            if res.data:
-                st.session_state.logged_in = True
-                st.session_state.merchant_phone = u_phone
-                st.success("تم تسجيل الدخول بنجاح!")
-                st.rerun()
-            else:
-                st.error("رقم الهاتف أو كلمة السر غير صحيحة")
-
-# --- دالة بوابة الربط ---
-def pairing_gate(phone):
-    st.title("📲 بوابة الربط الاحترافية")
+def process_whatsapp_pairing(phone):
+    st.title("📲 بوابة الربط الآلي")
     
-    # جلب البيانات باستخدام الأعمدة من صورتك: Merchant_nar و pairing_code
+    # جلب بيانات التاجر الحالية
     res = supabase.table('merchants').select("*").eq("Phone", phone).execute()
     m_data = res.data[0] if res.data else {}
-    
     m_id = m_data.get('instance_id')
     m_token = m_data.get('api_token')
-    saved_code = m_data.get('pairing_code')
 
+    # الخطوة أ: إنشاء السيرفر وسحب idInstance
     if not m_id or m_id == "None":
-        st.info("سيرفرك غير مفعل.") #
-        if st.button("🚀 إنشاء وتفعيل السيرفر"):
-            with st.spinner("جاري الإنشاء..."):
-                c_res = requests.post(f"{API_URL}/partner/createInstance/{PARTNER_TOKEN}", json={"plan": "developer"})
+        if st.button("🚀 إنشاء سيرفر جديد"):
+            with st.spinner("جاري إنشاء السيرفر وسحب idInstance..."):
+                create_url = f"{PARTNER_API_URL}/partner/createInstance/{PARTNER_TOKEN}"
+                c_res = requests.post(create_url, json={"plan": "developer"})
                 if c_res.status_code == 200:
-                    d = c_res.json()
+                    data = c_res.json()
+                    new_id = str(data['idInstance']) # هذا هو idInstance الذي تطلبينه
+                    new_token = data['apiTokenInstance']
+                    
+                    # حفظ idInstance في Supabase فوراً
                     supabase.table('merchants').update({
-                        "instance_id": str(d['idInstance']), 
-                        "api_token": d['apiTokenInstance']
+                        "instance_id": new_id, 
+                        "api_token": new_token
                     }).eq("Phone", phone).execute()
+                    st.success(f"✅ تم سحب المعرف: {new_id}")
+                    time.sleep(2)
                     st.rerun()
+
+    # الخطوة ب: طلب كود الربط باستخدام idInstance المحفوظ
     else:
-        st.success(f"✅ سيرفرك الحالي: {m_id}")
-        
-        if st.button("🔢 اطلب كود الربط الرقمي"):
-            with st.spinner("جاري جلب الكود من Green-API..."):
-                # محاولة تنظيف الجلسة وطلب الكود
-                requests.post(f"{API_URL}/waInstance{m_id}/logout/{m_token}")
-                time.sleep(2)
-                code_res = requests.post(f"{API_URL}/waInstance{m_id}/getPairingCode/{m_token}", json={"phoneNumber": phone})
-                if code_res.status_code == 200:
-                    code = code_res.json().get('code')
+        st.info(f"المعرف الحالي: {m_id}")
+        if st.button("🔢 طلب كود الربط لهذا السيرفر"):
+            with st.spinner("جاري طلب كود الربط من Green-API..."):
+                # تسجيل خروج لتهيئة السيرفر للربط
+                requests.post(f"{PARTNER_API_URL}/waInstance{m_id}/logout/{m_token}")
+                time.sleep(3)
+                
+                # جلب الكود الثماني
+                pair_url = f"{PARTNER_API_URL}/waInstance{m_id}/getPairingCode/{m_token}"
+                p_res = requests.post(pair_url, json={"phoneNumber": phone})
+                
+                if p_res.status_code == 200:
+                    code = p_res.json().get('code')
                     supabase.table('merchants').update({"pairing_code": code}).eq("Phone", phone).execute()
-                    st.session_state.p_code = code
+                    st.session_state.active_code = code
                     st.rerun()
 
-        # عرض الكود
-        display = st.session_state.get('p_code') or saved_code
-        if display:
-            st.markdown(f"<div style='text-align:center; background:#e3f2fd; padding:30px; border-radius:15px; border:3px dashed #2196f3;'><h1 style='font-size:60px; color:#075E54;'>{display}</h1></div>", unsafe_allow_html=True)
-            st.info("أدخل الكود في هاتفك.")
+    # عرض النتيجة النهائية
+    final_code = st.session_state.get('active_code') or m_data.get('pairing_code')
+    if final_code:
+        st.markdown(f"""
+            <div style="text-align:center; background:#f0f7ff; padding:30px; border-radius:15px; border:2px solid #2196f3;">
+                <h1 style="font-size:60px; color:#075E54;">{final_code}</h1>
+                <p>أدخل الكود في هاتفك المتصل برقم {phone}</p>
+            </div>
+        """, unsafe_allow_html=True)
 
-# --- منطق تشغيل التطبيق ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-
-if not st.session_state.logged_in:
-    login_page()
-else:
-    pairing_gate(st.session_state.merchant_phone)
-    if st.sidebar.button("تسجيل خروج"):
-        st.session_state.logged_in = False
-        st.rerun()
+# استدعاء الدالة بعد تسجيل الدخول
+if st.session_state.get('logged_in'):
+    process_whatsapp_pairing(st.session_state.merchant_phone)
