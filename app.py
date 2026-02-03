@@ -3,98 +3,135 @@ import os, requests, time
 from dotenv import load_dotenv
 from supabase import create_client
 
-# --- الإعدادات الثابتة ---
+# --- 1. الإعدادات ---
 load_dotenv()
 PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
-PARTNER_API_URL = "https://api.green-api.com"
 WEBHOOK_URL = "https://rimstorebot.pythonanywhere.com/whatsapp"
 
-st.set_page_config(page_title="لوحة تحكم ريم ستور", layout="wide")
+st.set_page_config(page_title="لوحة تحكم ريم ستور", layout="wide", page_icon="📲")
+
+# التنسيق الجمالي
+st.markdown("""
+    <style>
+    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
+    .code-box { font-size: 35px; font-family: monospace; color: #075E54; background: #e3f2fd; padding: 15px; border-radius: 10px; text-align: center; border: 2px dashed #2196f3; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # الاتصال بـ Supabase
-url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
-key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
 supabase = create_client(url, key)
 
-# --- الدوال المحسنة ---
+# --- 2. الوظائف التقنية ---
 
-def get_pairing_code_logic(m_id, m_token, phone):
-    """السر هنا: نجلب الكود، نحفظه في الداتابيز، ونعيده فوراً للمتصفح"""
-    clean_phone = ''.join(filter(str.isdigit, str(phone)))
-    # تسجيل الخروج لضمان استجابة السيرفر لطلب كود جديد
-    requests.post(f"{PARTNER_API_URL}/waInstance{m_id}/logout/{m_token}")
-    time.sleep(1) 
-    
-    url = f"{PARTNER_API_URL}/waInstance{m_id}/getPairingCode/{m_token}"
+def register_merchant(name, store_name, phone, password):
+    """إنشاء حساب تاجر جديد في قاعدة البيانات"""
     try:
-        res = requests.post(url, json={"phoneNumber": clean_phone}, timeout=20)
-        if res.status_code == 200:
-            p_code = res.json().get('code')
-            # الأمان: الحفظ في الداتابيز ليبقى هناك للأبد
-            supabase.table('merchants').update({"pairing_code": p_code}).eq("Phone", phone).execute()
-            return p_code
-    except: pass
-    return None
+        data = {
+            "merchant_name": name,
+            "Store_name": store_name,
+            "Phone": phone,
+            "password": password,
+            "instance_id": None,
+            "api_token": None
+        }
+        supabase.table('merchants').insert(data).execute()
+        return True
+    except Exception as e:
+        st.error(f"خطأ في التسجيل: {e}")
+        return False
 
-# --- نظام الدخول والجلسة ---
-if 'logged_in' not in st.session_state: st.session_state.logged_in = False
-# هذا هو المفتاح لظهور الرقم فوراً في المتصفح
-if 'last_p_code' not in st.session_state: st.session_state.last_p_code = None
+def create_merchant_instance(phone):
+    """إنشاء السيرفر وربطه فوراً بالرقم"""
+    url = f"https://api.green-api.com/partner/createInstance/{PARTNER_KEY}"
+    try:
+        res = requests.post(url, json={"plan": "developer"}, timeout=25)
+        if res.status_code == 200:
+            data = res.json()
+            m_id = str(data.get('idInstance'))
+            m_token = data.get('apiTokenInstance')
+            
+            # تحديث قاعدة البيانات فوراً بالـ ID والـ Token
+            supabase.table('merchants').update({
+                "instance_id": m_id, 
+                "api_token": m_token
+            }).eq("Phone", phone).execute()
+            
+            # ضبط الويب هوك
+            requests.post(f"https://api.green-api.com/waInstance{m_id}/setSettings/{m_token}", 
+                          json={"webhookUrl": WEBHOOK_URL, "incomingMsg": "yes"})
+            return m_id, m_token
+    except: pass
+    return None, None
+
+# --- 3. نظام الدخول والاشتراك ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    # (كود تسجيل الدخول المعتاد)
-    with st.form("login"):
-        u_phone = st.text_input("رقم الهاتف")
-        u_pw = st.text_input("كلمة السر", type="password")
-        if st.form_submit_button("دخول"):
-            res = supabase.table('merchants').select("*").eq("Phone", u_phone).eq("password", u_pw).execute()
-            if res.data:
-                st.session_state.logged_in = True
-                st.session_state.merchant_phone = u_phone
-                st.rerun()
-    st.stop()
-
-# --- واجهة التاجر ---
-tabs = st.tabs(["➕ إضافة منتج", "📲 واتساب"])
-
-with tabs[1]:
-    st.subheader("📲 ربط الواتساب")
-    curr_phone = st.session_state.merchant_phone
+    tab_login, tab_signup = st.tabs(["تسجيل الدخول", "إنشاء حساب تاجر جديد"])
     
-    # جلب البيانات من الداتابيز (للتأكد من وجود سيرفر)
-    m_res = supabase.table('merchants').select("*").eq("Phone", curr_phone).execute()
-    m_data = m_res.data[0] if m_res.data else {}
-    m_id = m_data.get('instance_id')
-    m_token = m_data.get('api_token')
-    db_saved_code = m_data.get('pairing_code') # الكود المخزن في الداتابيز
-
-    if not m_id:
-        st.info("السيرفر غير مفعل.")
-        if st.button("🚀 إنشاء السيرفر"):
-            # (كود إنشاء السيرفر)
-            st.rerun()
-    else:
-        st.success(f"✅ السيرفر نشط: {m_id}")
-        
-        if st.button("🔢 استخراج الكود الآن"):
-            with st.spinner("جاري جلب الكود..."):
-                code = get_pairing_code_logic(m_id, m_token, curr_phone)
-                if code:
-                    # السر الذي اكتشفته في كودك: نضع الكود في الذاكرة المؤقتة ليعرض فوراً
-                    st.session_state.last_p_code = code 
+    with tab_login:
+        with st.form("login_form"):
+            l_phone = st.text_input("رقم الواتساب")
+            l_pass = st.text_input("كلمة السر", type="password")
+            if st.form_submit_button("دخول"):
+                res = supabase.table('merchants').select("*").eq("Phone", l_phone).eq("password", l_pass).execute()
+                if res.data:
+                    st.session_state.logged_in = True
+                    st.session_state.merchant_phone = l_phone
                     st.rerun()
+                else: st.error("بيانات الدخول غير صحيحة")
 
-        # العرض الذكي: يعرض كود الجلسة فوراً، أو الكود المحفوظ في الداتابيز إذا لم يوجد كود جلسة
-        display_code = st.session_state.last_p_code or db_saved_code
-        
-        if display_code:
-            st.markdown(f"""
-            <div style="text-align:center; background:#e3f2fd; padding:20px; border-radius:10px; border:2px dashed #2196f3;">
-                <h1 style="color:#075E54; font-family:monospace; font-size:50px;">{display_code}</h1>
-            </div>
-            """, unsafe_allow_html=True)
+    with tab_signup:
+        with st.form("signup_form"):
+            new_name = st.text_input("اسم التاجر")
+            new_store = st.text_input("اسم المحل")
+            new_phone = st.text_input("رقم الواتساب (بالصيغة الدولية مثلاً 222...)")
+            new_pass = st.text_input("كلمة السر", type="password")
+            if st.form_submit_button("إنشاء الحساب"):
+                if register_merchant(new_name, new_store, new_phone, new_pass):
+                    st.success("تم إنشاء حسابك بنجاح! يمكنك الآن تسجيل الدخول.")
 
-    if st.button("🗑️ حذف وإعادة ضبط"):
-        supabase.table('merchants').update({"pairing_code": None, "instance_id": None}).eq("Phone", curr_phone).execute()
-        st.session_state.last_p_code = None
+else:
+    # --- 4. واجهة التاجر بعد الدخول ---
+    current_phone = st.session_state.merchant_phone
+    m_query = supabase.table('merchants').select("*").eq("Phone", current_phone).execute()
+    merchant_data = m_query.data[0] if m_query.data else {}
+    
+    st.title(f"مرحباً بك، {merchant_data.get('merchant_name')}")
+    st.write(f"متجر: **{merchant_data.get('Store_name')}**")
+
+    m_id = merchant_data.get('instance_id')
+    m_token = merchant_data.get('api_token')
+
+    # فحص حالة السيرفر
+    if not m_id or m_id == "None":
+        st.warning("⚠️ سيرفر الواتساب غير مفعل لمتجرك.")
+        if st.button("🚀 تفعيل السيرفر الآن"):
+            with st.spinner("جاري تهيئة السيرفر الخاص بك..."):
+                m_id, m_token = create_merchant_instance(current_phone)
+                if m_id:
+                    st.success("تم التفعيل! أعد المحاولة الآن لجلب الكود.")
+                    st.rerun()
+    else:
+        st.info(f"✅ السيرفر نشط (ID: {m_id})")
+        if st.button("🔢 اطلب كود الربط الآن"):
+            with st.spinner("جاري استخراج الكود..."):
+                # محاولة جلب كود الربط
+                url = f"https://api.green-api.com/waInstance{m_id}/getPairingCode/{m_token}"
+                res = requests.post(url, json={"phoneNumber": current_phone})
+                if res.status_code == 200:
+                    code = res.json().get('code')
+                    st.session_state.pairing_code = code
+                else:
+                    st.error("حدث خطأ في طلب الكود، تأكد من أن السيرفر غير مرتبط بجهاز آخر.")
+
+        if 'pairing_code' in st.session_state:
+            st.markdown(f"<div class='code-box'>{st.session_state.pairing_code}</div>", unsafe_allow_html=True)
+            st.write("افتح واتساب -> الأجهزة المرتبطة -> ربط عبر رقم الهاتف وأدخل الكود أعلاه.")
+
+    if st.button("تسجيل الخروج"):
+        st.session_state.logged_in = False
         st.rerun()
