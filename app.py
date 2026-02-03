@@ -3,17 +3,17 @@ import os, requests, time
 from dotenv import load_dotenv
 from supabase import create_client
 
-# --- 1. الإعدادات والجماليات (ثابتة تماماً) ---
+# --- 1. الإعدادات والجماليات (أصلية 100%) ---
 load_dotenv()
 PARTNER_KEY = "gac.797de6c64eb044699bb14882e34aaab52fda1d5b1de643"
 WEBHOOK_URL = "https://rimstorebot.pythonanywhere.com/whatsapp"
 
 st.set_page_config(page_title="لوحة تحكم ريم ستور", layout="wide", page_icon="📲")
 
-# الاتصال بـ Supabase (تأكدي من وجود الخيارات في Secrets)
+# الاتصال بـ Supabase
 supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-# --- 2. المحرك التقني المستقر (كودك الأصلي دون تغيير) ---
+# --- 2. المحرك التقني المستقر (كودك الناجح كما هو) ---
 def create_merchant_instance(phone):
     url = f"https://api.green-api.com/partner/createInstance/{PARTNER_KEY}"
     try:
@@ -39,37 +39,30 @@ def get_pairing_code(m_id, m_token, phone):
     except: pass
     return None
 
-# --- 3. نظام الجلسة وتسجيل الدخول/الخروج ---
+# --- 3. نظام تسجيل الدخول وإنشاء الحساب ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
-# زر تسجيل الخروج في الجانب (Sidebar) ليكون متاحاً دائماً بعد الدخول
-if st.session_state.logged_in:
-    if st.sidebar.button("🚪 تسجيل الخروج"):
-        st.session_state.logged_in = False
-        st.rerun()
-
 if not st.session_state.logged_in:
-    tab_login, tab_register = st.tabs(["🔐 تسجيل دخول", "📝 إنشاء حساب جديد"])
+    auth_tab, reg_tab = st.tabs(["🔐 دخول", "📝 فتح حساب جديد"])
     
-    # مكان إنشاء حساب جديد
-    with tab_register:
-        with st.form("reg_form"):
-            reg_name = st.text_input("اسم التاجر")
-            reg_store = st.text_input("اسم المحل")
-            reg_phone = st.text_input("رقم الهاتف")
-            reg_pass = st.text_input("كلمة السر", type="password")
-            if st.form_submit_button("إنشاء الحساب"):
+    with reg_tab:
+        with st.form("registration"):
+            st.write("### انضم لـ ريم ستور")
+            new_m_name = st.text_input("اسم التاجر")
+            new_s_name = st.text_input("اسم المحل")
+            new_phone = st.text_input("رقم الهاتف")
+            new_pass = st.text_input("كلمة السر", type="password")
+            if st.form_submit_button("إنشاء حسابي"):
                 supabase.table('merchants').insert({
-                    "Merchant_name": reg_name, "Store_name": reg_store, 
-                    "Phone": reg_phone, "password": reg_pass
+                    "Merchant_name": new_m_name, "Store_name": new_s_name, 
+                    "Phone": new_phone, "password": new_pass
                 }).execute()
-                st.success("تم إنشاء الحساب بنجاح! توجه لتبويب تسجيل الدخول.")
+                st.success("🎉 تم التسجيل بنجاح! يمكنك الدخول الآن.")
 
-    # مكان تسجيل الدخول
-    with tab_login:
+    with auth_tab:
         with st.form("login_form"):
-            u_phone = st.text_input("رقم التاجر")
+            u_phone = st.text_input("الرقم")
             u_pw = st.text_input("كلمة السر", type="password")
             if st.form_submit_button("دخول"):
                 res = supabase.table('merchants').select("*").eq("Phone", u_phone).eq("password", u_pw).execute()
@@ -78,81 +71,73 @@ if not st.session_state.logged_in:
                     st.session_state.merchant_phone = u_phone
                     st.session_state.store_name = res.data[0].get('Store_name')
                     st.rerun()
-                else: st.error("بيانات خاطئة")
+                else: st.error("❌ بيانات خاطئة")
 
 else:
-    # واجهة التاجر
+    # --- 4. لوحة تحكم التاجر المدمجة ---
     st.sidebar.title(f"🏪 {st.session_state.store_name}")
+    if st.sidebar.button("🚪 خروج"):
+        st.session_state.logged_in = False
+        st.rerun()
+
     tabs = st.tabs(["➕ إضافة منتج", "✏️ إدارة السعر", "🛒 الطلبات", "📲 واتساب"])
 
-    # تبويب إضافة منتجات (كل الخانات المطلوبة)
     with tabs[0]:
         st.subheader("📦 إضافة منتج جديد")
-        with st.form("add_prod"):
+        with st.form("product_form"):
             p_name = st.text_input("اسم المنتج")
             p_price = st.text_input("سعر المنتج")
             p_colors = st.text_input("الألوان")
             p_size = st.text_input("مقاس")
-            p_img = st.file_uploader("رفع صورة المنتج", type=['png', 'jpg', 'jpeg'])
-            if st.form_submit_button("حفظ المنتج"):
-                # هنا يتم الحفظ في جدول products
+            p_img = st.text_input("رابط صورة المنتج")
+            if st.form_submit_button("حفظ"):
                 supabase.table('products').insert({
                     "Product": p_name, "Price": p_price, "Color": p_colors, 
-                    "Size": p_size, "Phone": st.session_state.merchant_phone
+                    "Size": p_size, "Image_url": p_img, "Phone": st.session_state.merchant_phone
                 }).execute()
-                st.success("تم حفظ المنتج!")
+                st.success("تم الحفظ!")
 
-    # تبويب إدارة السعر والتوفر
     with tabs[1]:
-        st.subheader("✏️ إدارة أسعار وتوفر المنتجات")
-        prods = supabase.table('products').select("*").eq("Phone", st.session_state.merchant_phone).execute()
-        for p in prods.data:
+        st.subheader("✏️ تعديل الأسعار والتوفر")
+        p_res = supabase.table('products').select("*").eq("Phone", st.session_state.merchant_phone).execute()
+        for p in p_res.data:
             with st.expander(f"تعديل: {p['Product']}"):
-                new_p = st.text_input("تغيير السعر", value=p['Price'], key=f"price_{p['id']}")
-                is_avail = st.selectbox("الحالة", ["متوفر", "غير متوفر"], 
-                                      index=0 if p.get('Status') else 1, key=f"stat_{p['id']}")
-                if st.button("تحديث البيانات", key=f"btn_{p['id']}"):
-                    supabase.table('products').update({
-                        "Price": new_p, "Status": (is_avail == "متوفر")
-                    }).eq("id", p['id']).execute()
+                new_val = st.text_input("السعر", p['Price'], key=f"p_{p['id']}")
+                is_on = st.checkbox("متوفر حالياً", value=p.get('Status', True), key=f"s_{p['id']}")
+                if st.button("تحديث السعر", key=f"b_{p['id']}"):
+                    supabase.table('products').update({"Price": new_val, "Status": is_on}).eq("id", p['id']).execute()
                     st.rerun()
 
-    # تبويب الطلبات (الواردة من واتساب)
     with tabs[2]:
-        st.subheader("🛒 طلبات واتساب")
-        orders = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
-        st.table(orders.data)
+        st.subheader("🛒 قائمة الطلبات")
+        o_res = supabase.table('orders').select("*").eq("merchant_phone", st.session_state.merchant_phone).execute()
+        st.table(o_res.data)
 
-    # تبويب واتساب (تعديل الـ 30 ثانية والحفظ)
     with tabs[3]:
-        st.subheader("📲 بوابة ربط الواتساب")
-        m_query = supabase.table('merchants').select("*").eq("Phone", st.session_state.merchant_phone).execute()
-        m_data = m_query.data[0] if m_query.data else {}
-        m_id = m_data.get('instance_id')
-        m_token = m_data.get('api_token')
+        st.subheader("📲 بوابة الواتساب (ثبات 30 ثانية)")
+        m_q = supabase.table('merchants').select("*").eq("Phone", st.session_state.merchant_phone).execute()
+        m_d = m_q.data[0] if m_q.data else {}
+        m_id, m_tok = m_d.get('instance_id'), m_d.get('api_token')
 
-        if not m_id or m_id == "None":
+        if not m_id:
             if st.button("🚀 تفعيل السيرفر"):
                 create_merchant_instance(st.session_state.merchant_phone)
                 st.rerun()
         else:
             if st.button("🔢 استخراج كود الربط"):
-                p_code = get_pairing_code(m_id, m_token, st.session_state.merchant_phone)
-                if p_code:
-                    # 1. حفظ الكود في الداتابيز فوراً
-                    supabase.table('merchants').update({"pairing_code": p_code}).eq("Phone", st.session_state.merchant_phone).execute()
-                    
-                    # 2. إظهار الكود لمدة 30 ثانية مع عداد
-                    stop_time = time.time() + 30
-                    placeholder = st.empty()
-                    while time.time() < stop_time:
-                        remaining = int(stop_time - time.time())
-                        placeholder.markdown(f"""
-                        <div style='text-align:center; background:#e3f2fd; padding:20px; border-radius:10px; border:2px solid #2196f3;'>
-                            <h1 style='color:#075E54; font-size:50px;'>{p_code}</h1>
-                            <p>هذا الكود سينتهي ويختفي خلال <b>{remaining}</b> ثانية</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        time.sleep(1)
-                    placeholder.empty()
-                    st.warning("انتهى وقت الكود. إذا لم يتم الربط، اطلب كوداً جديداً.")
+                code = get_pairing_code(m_id, m_tok, st.session_state.merchant_phone)
+                if code:
+                    # حفظ في الداتابيز وتثبيت العرض
+                    supabase.table('merchants').update({"pairing_code": code}).eq("Phone", st.session_state.merchant_phone).execute()
+                    st.session_state.view_code = code
+                    st.session_state.timer = time.time() + 30
+                    st.rerun()
+
+            if 'view_code' in st.session_state:
+                rem = int(st.session_state.timer - time.time())
+                if rem > 0:
+                    st.markdown(f"<div style='text-align:center; background:#e3f2fd; padding:30px; border-radius:15px; border:2px solid #2196f3;'><h1 style='color:#075E54; font-size:60px;'>{st.session_state.view_code}</h1><p>يختفي الكود بعد {rem} ثانية</p></div>", unsafe_allow_html=True)
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.session_state.pop('view_code', None)
